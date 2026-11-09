@@ -93,7 +93,11 @@ export type StepKind =
   | 'save_message'
   | 'wait_launch'
   | 'send_partner'
-  | 'verify_sent';
+  | 'verify_sent'
+  | 'check_status'
+  | 'resend_same'
+  | 'resend_new'
+  | 'give_up';
 
 /** What a Decide step is for. Logo decisions use the context-tray rules; the rest are shift work. */
 export type DecidePurpose =
@@ -183,6 +187,10 @@ export interface Fixture {
   /** Who can approve, until when, and how long a reply takes. */
   approver?: { who: PersonId; until: Ms; replyAfter: Ms };
   deadlines?: Partial<Record<Responsibility | 'feedback_early', Ms>>;
+  /** Uncertain publication: the first publish commits but its reply is lost. */
+  publication?: { loseFirstReply: boolean; commitAfter: Ms; timeoutAfter: Ms };
+  /** Feedback workload (default 9 complete + 3 incomplete threads). */
+  feedback?: { complete: number; incomplete: number };
   availability: Record<string, { label: string; until: Ms }>;
   delegation: { preview: 'edit'; live: 'none' | 'approval' };
   /** Files on the shared shelf at shift start that no step reads by default. */
@@ -247,6 +255,10 @@ export interface RunNotes {
   feedbackRead?: boolean;
   draftRead?: boolean;
   message?: { formatted: boolean; saved: boolean; sent: boolean };
+  /** Publish request sent but no reply: did it happen? */
+  unknownOutcome?: boolean;
+  reconciled?: boolean;
+  requests?: number;
 }
 
 export interface TaskRun {
@@ -335,6 +347,8 @@ export interface WorldState {
   approvals: { version: number; at: Ms; requestedAt: Ms }[];
   board: { items: number; at: Ms } | null;
   partnerMessage: { at: Ms; liveRev: number | null } | null;
+  /** Publish requests that reached the live-page service (a reused key is still a request). */
+  publishRequests: number;
   latestLogoRevSent: number;
   mayaThanked: boolean;
 }
@@ -374,7 +388,7 @@ export interface QueuedEvent {
   t: Ms;
   phase: number;
   seq: number;
-  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'approval' | 'end';
+  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'approval' | 'commit' | 'end';
   taskId?: string;
   msgId?: string;
   watcher?: number;

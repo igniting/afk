@@ -31,6 +31,7 @@ export interface OpeningOutcome {
   jobs: JobResult[];
   feedbackEarly: boolean;
   budgetStuck: boolean;
+  publishRequests: number;
 }
 
 export function evaluateOpening(s: SimState, deadlines: Partial<Record<Responsibility | 'feedback_early', Ms>> = {}): OpeningOutcome {
@@ -101,5 +102,6 @@ export function evaluateOpening(s: SimState, deadlines: Partial<Record<Responsib
     jobs,
     feedbackEarly: !!board?.ok && early != null && board.doneAt! <= early,
     budgetStuck: s.tasks.some((t) => t.status === 'WAITING_BUDGET'),
+    publishRequests: s.world.publishRequests,
   };
 }

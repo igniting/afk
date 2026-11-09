@@ -392,3 +392,11 @@ code { font-size: 13px; background: #0e182c; padding: 1px 5px; border-radius: 4p
 .app[data-advanced='false'] .rail-pager.multi { display: flex !important; }
 @media (min-width: 901px) { .app[data-advanced='false'] .rail-pager.multi { display: none !important; } }
 @media (max-width: 900px) { .board-hint { width: calc(100% - 24px); } }
+
+.compare-runs { border: 1px solid #1f5f4f; background: #0d211d; border-radius: var(--radius); padding: 10px 12px; margin: 10px 0; text-align: left; }
+.compare-runs table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.compare-runs th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 4px; }
+.compare-runs td { padding: 4px; border-top: 1px solid #1d3b34; }
+.compare-runs tr.current td { font-weight: 600; }
+.compare-runs .medal { font-size: 15px; }
+.challenge { background: #2a240b; border: 1px solid #5b4f13; border-radius: 10px; padding: 8px 12px; text-align: left; }

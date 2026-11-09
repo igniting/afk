@@ -7,7 +7,7 @@ import { OPENING } from './opening';
 
 export const TAGLINE = 'Light up launch night.';
 
-export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel';
+export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel' | 'uncertainty';
 
 export interface Concept {
   id: ConceptId;
@@ -71,6 +71,17 @@ export const CONCEPTS: Concept[] = [
       'Independent jobs can run at the same time on separate workers; one worker does them in turn.',
       'While a job waits for a person, its worker is free for other work.',
       'Routing clear cases to a small model and hard ones to a big model can be what makes a plan affordable.',
+    ],
+  },
+  {
+    id: 'uncertainty',
+    icon: '❔',
+    title: 'Timeouts aren’t failures',
+    short: 'A request can succeed even when its reply never arrives.',
+    points: [
+      'A timeout only means “no answer yet” — the action may already have happened.',
+      'Check what really happened (a status lookup) before doing anything else.',
+      'Reusing the same request key lets a careful service ignore a repeat; a brand-new request is blocked while the first is unresolved, so nothing is published twice.',
     ],
   },
   { id: 'memory', icon: '🗂️', title: 'Memory', short: 'Coming later.', points: [] },
@@ -148,6 +159,11 @@ export interface Mission {
   askWake: boolean;
   askGuide: boolean;
   askApproval?: boolean;
+  /** Mission 6: always ask Maya, and choose what to do when a publish times out. */
+  autoApproval?: boolean;
+  askRecovery?: boolean;
+  /** Variant of an earlier mission with changed conditions. */
+  challenge?: string;
   /** Shift missions build from job/machine/sorting choices instead of a single procedure. */
   shift?: boolean;
   prediction: Prediction;
@@ -355,25 +371,20 @@ const LAUNCH: StepDef[] = [
   { kind: 'publish_live' },
   { kind: 'verify_live' },
 ];
-const FEEDBACK: Record<Sorting, StepDef[]> = {
-  careful: [
-    { kind: 'read_feedback' },
-    { kind: 'decide', model: 'deliberate', purpose: 'sort_all' },
-    { kind: 'decide', model: 'deliberate', purpose: 'sort_all' },
-    { kind: 'decide', model: 'deliberate', purpose: 'sort_all' },
-    { kind: 'decide', model: 'deliberate', purpose: 'reduce' },
-    { kind: 'save_board' },
-  ],
-  routed: [
-    { kind: 'read_feedback' },
-    { kind: 'decide', model: 'swift', purpose: 'sort_complete' },
-    { kind: 'decide', model: 'swift', purpose: 'sort_complete' },
-    { kind: 'decide', model: 'swift', purpose: 'sort_complete' },
-    { kind: 'decide', model: 'deliberate', purpose: 'sort_incomplete' },
-    { kind: 'decide', model: 'swift', purpose: 'reduce' },
-    { kind: 'save_board' },
-  ],
-};
+/** Feedback procedures depend on the observed workload, not on hidden difficulty. */
+export function feedbackProcedure(sorting: Sorting, fb: { complete: number; incomplete: number }): StepDef[] {
+  const steps: StepDef[] = [{ kind: 'read_feedback' }];
+  if (sorting === 'routed') {
+    for (let i = 0; i < Math.ceil(fb.complete / 3); i++) steps.push({ kind: 'decide', model: 'swift', purpose: 'sort_complete' });
+    if (fb.incomplete) steps.push({ kind: 'decide', model: 'deliberate', purpose: 'sort_incomplete' });
+    steps.push({ kind: 'decide', model: 'swift', purpose: 'reduce' });
+  } else {
+    for (let i = 0; i < Math.ceil((fb.complete + fb.incomplete) / 4); i++) steps.push({ kind: 'decide', model: 'deliberate', purpose: 'sort_all' });
+    steps.push({ kind: 'decide', model: 'deliberate', purpose: 'reduce' });
+  }
+  steps.push({ kind: 'save_board' });
+  return steps;
+}
 const PARTNER: StepDef[] = [
   { kind: 'read_draft' },
   { kind: 'decide', model: 'swift', purpose: 'partner_prepare' },
@@ -385,8 +396,9 @@ const PARTNER: StepDef[] = [
   { kind: 'verify_sent' },
 ];
 
-export function shiftBuild(base: Build, c: ShiftChoices): Build {
-  const procedures = { launch: LAUNCH, feedback: FEEDBACK[c.sorting], partner: PARTNER };
+export function shiftBuild(base: Build, c: ShiftChoices, fixture?: Fixture): Build {
+  const fb = fixture?.feedback ?? { complete: 9, incomplete: 3 };
+  const procedures = { launch: LAUNCH, feedback: feedbackProcedure(c.sorting, fb), partner: PARTNER };
   const worker = (responsibilities: Responsibility[]): WorkerCfg => ({
     card: 'worker',
     responsibilities,
@@ -405,6 +417,76 @@ export function shiftBuild(base: Build, c: ShiftChoices): Build {
 }
 
 const allJobsOk = (o: OpeningOutcome) => o.jobs.length === 3 && o.jobs.every((j) => j.ok) && o.feedbackEarly;
+
+function shiftMedals(early: Ms, third: Medal): Medal[] {
+  return [
+    {
+      id: 'done',
+      icon: '🏁',
+      label: 'Launch page live, with Maya’s OK',
+      hint: 'The launch is the one job you must finish.',
+      test: (o) => o.promiseKept,
+      measure: (o) => ({ you: o.promiseKept ? 'live' : (o.jobs.find((j) => j.id === 'launch')?.status ?? 'not live'), goal: 'live by 19:00' }),
+    },
+    {
+      id: 'all',
+      icon: '⭐',
+      label: `All three jobs done (board before ${fmtTime(early)})`,
+      hint: 'Take on every job, keep within budget, and get the board to Maya before she leaves.',
+      test: (o) => o.promiseKept && allJobsOk(o),
+      measure: (o) => {
+        const missing = o.jobs.filter((j) => !j.ok).map((j) => `${j.id}: ${j.status}`);
+        const goal = `all done, board ≤ ${fmtTime(early)}`;
+        if (!missing.length && !o.feedbackEarly) {
+          const fb = o.jobs.find((j) => j.id === 'feedback');
+          return { you: `board at ${fb?.doneAt != null ? fmtTime(fb.doneAt) : '—'}`, goal };
+        }
+        return { you: missing.length ? missing.join(' · ') : 'all done', goal };
+      },
+    },
+    third,
+  ];
+}
+
+const wrapMedal: Medal = {
+  id: 'wrap',
+  icon: '⏱️',
+  label: 'Everything you took on done by 18:30',
+  hint: 'One worker does jobs in turn; a second worker runs them side by side.',
+  goal: { by: at(18, 30) },
+  test: (o) => o.promiseKept && o.jobs.every((j) => !j.accepted || (j.doneAt != null && j.doneAt <= at(18, 30))),
+  measure: (o) => {
+    const accepted = o.jobs.filter((j) => j.accepted);
+    if (accepted.some((j) => j.doneAt == null)) return { you: 'not everything finished', goal: 'all by 18:30' };
+    return { you: `last job done ${fmtTime(Math.max(...accepted.map((j) => j.doneAt!)))}`, goal: 'all by 18:30' };
+  },
+};
+
+function shiftPrediction(early: Ms): Prediction {
+  return {
+    question: 'Will every job you accepted be finished in time — and within the 50-credit budget?',
+    options: [
+      { id: 'yes', label: 'Yes — everything I took on gets done' },
+      { id: 'no', label: 'No — something will be late or run out of credits' },
+    ],
+    answer: (s) => {
+      const ok = s.tasks.every((t) => t.status === 'DONE');
+      const fb = s.tasks.find((t) => t.responsibility === 'feedback');
+      const ontime = !fb || (fb.runs[0]?.notes.receipt?.at ?? Infinity) <= early;
+      return ok && ontime && s.tasks.length > 0 ? 'yes' : 'no';
+    },
+    explain: (s) => {
+      const stuck = s.tasks.find((t) => t.status === 'WAITING_BUDGET');
+      if (stuck) return `“${stuck.title}” stopped: the next step would have taken spending past ${s.credits.budget} credits. The budget is a hard limit — no overdraft.`;
+      const fb = s.tasks.find((t) => t.responsibility === 'feedback');
+      const fbAt = fb?.runs[0]?.notes.receipt?.at;
+      if (fb && fbAt && fbAt > early) return `The feedback board was ready at ${fmtTime(fbAt)} — after Maya left at ${fmtTime(early)}.`;
+      return s.workers.length > 1
+        ? 'Two workers ran the launch and the other jobs side by side, and the approval wait didn’t hold anyone up.'
+        : 'One worker did everything in turn; while the launch waited for Maya’s OK, the worker picked up other jobs.';
+    },
+  };
+}
 
 const M5: Mission = {
   id: 'm5',
@@ -452,69 +534,122 @@ const M5: Mission = {
       { id: 'm-nora-confirm', from: 'nora', at: at(18, 22), subject: 'Partner announcement — confirmed', body: 'We’re good to go with the announcement once your page is live.', kind: 'confirm' },
     ],
   },
-  prediction: {
-    question: 'Will every job you accepted be finished in time — and within the 50-credit budget?',
-    options: [
-      { id: 'yes', label: 'Yes — everything I took on gets done' },
-      { id: 'no', label: 'No — something will be late or run out of credits' },
-    ],
-    answer: (s) => {
-      const accepted = s.tasks.map((t) => t.responsibility);
-      const ok = s.tasks.every((t) => t.status === 'DONE');
-      const fb = s.tasks.find((t) => t.responsibility === 'feedback');
-      const early = !fb || (fb.runs[0]?.notes.receipt?.at ?? Infinity) <= at(18, 40);
-      return ok && early && accepted.length > 0 ? 'yes' : 'no';
-    },
-    explain: (s) => {
-      const stuck = s.tasks.find((t) => t.status === 'WAITING_BUDGET');
-      if (stuck) return `“${stuck.title}” stopped: the next step would have taken spending past ${s.credits.budget} credits. The budget is a hard limit — no overdraft.`;
-      const fb = s.tasks.find((t) => t.responsibility === 'feedback');
-      const fbAt = fb?.runs[0]?.notes.receipt?.at;
-      if (fb && fbAt && fbAt > at(18, 40)) return `The feedback board was ready at ${fmtTime(fbAt)} — after Maya left at 18:40.`;
-      const workers = s.workers.length;
-      return workers > 1
-        ? 'Two workers ran the launch and the other jobs side by side, and the approval wait didn’t hold anyone up.'
-        : 'One worker did everything in turn; while the launch waited for Maya’s OK, the worker picked up other jobs.';
-    },
-  },
-  medals: [
-    {
-      id: 'done',
-      icon: '🏁',
-      label: 'Launch page live, with Maya’s OK',
-      hint: 'The launch is the one job you must finish.',
-      test: (o) => o.promiseKept,
-      measure: (o) => ({ you: o.promiseKept ? 'live' : (o.jobs.find((j) => j.id === 'launch')?.status ?? 'not live'), goal: 'live by 19:00' }),
-    },
-    {
-      id: 'all',
-      icon: '⭐',
-      label: 'All three jobs done (board before 18:40)',
-      hint: 'Take on every job, keep within budget, and get the board to Maya before she leaves.',
-      test: (o) => o.promiseKept && allJobsOk(o),
-      measure: (o) => {
-        const missing = o.jobs.filter((j) => !j.ok).map((j) => `${j.id}: ${j.status}`);
-        if (!missing.length && !o.feedbackEarly) return { you: 'board after 18:40', goal: 'all done, board ≤ 18:40' };
-        return { you: missing.length ? missing.join(' · ') : 'all done', goal: 'all done, board ≤ 18:40' };
-      },
-    },
-    {
-      id: 'wrap',
-      icon: '⏱️',
-      label: 'Everything you took on done by 18:30',
-      hint: 'One worker does jobs in turn; a second worker runs them side by side.',
-      goal: { by: at(18, 30) },
-      test: (o) => o.promiseKept && o.jobs.every((j) => !j.accepted || (j.doneAt != null && j.doneAt <= at(18, 30))),
-      measure: (o) => {
-        const accepted = o.jobs.filter((j) => j.accepted);
-        if (accepted.some((j) => j.doneAt == null)) return { you: 'not everything finished', goal: 'all by 18:30' };
-        const last = Math.max(...accepted.map((j) => j.doneAt!));
-        return { you: `last job done ${fmtTime(last)}`, goal: 'all by 18:30' };
-      },
-    },
-  ],
+  prediction: shiftPrediction(at(18, 40)),
+  medals: shiftMedals(at(18, 40), wrapMedal),
 };
 
 MISSIONS.push(M4, M5);
 
-export const COMING_SOON = [{ n: 6, title: 'Plans changed', concept: 'memory' as ConceptId }];
+// ---------------------------------------------------------------------------
+// Mission 6 — Lost reply (uncertain outcomes)
+
+export type Recovery = 'check_status' | 'resend_same' | 'resend_new' | 'give_up';
+
+/** Choose what happens if the publish reply never comes back. */
+export function setRecovery(w: WorkerCfg, r: Recovery) {
+  const drop = new Set(['check_status', 'resend_same', 'resend_new', 'give_up']);
+  w.procedure = w.procedure.filter((x) => !drop.has(x.kind));
+  const at = w.procedure.findIndex((x) => x.kind === 'publish_live');
+  w.procedure.splice(at + 1, 0, { kind: r });
+}
+
+const M6: Mission = {
+  id: 'm6',
+  n: 6,
+  title: 'Lost reply',
+  goal: 'Logo live with Maya’s OK — even if the service goes quiet',
+  concept: 'uncertainty',
+  askWake: false,
+  askGuide: false,
+  autoApproval: true,
+  askRecovery: true,
+  fixture: {
+    ...M4.fixture,
+    id: 'm6-lost-reply',
+    title: 'Lost reply',
+    publication: { loseFirstReply: true, commitAfter: 1 * MIN, timeoutAfter: 2 * MIN },
+    messages: brief('Same as before: once I’ve approved the logo, put it on the live page. Heads-up — the live-page service is flaky tonight and sometimes doesn’t answer.'),
+  },
+  prediction: {
+    question: 'Your agent publishes, but the live-page service never replies. Has the page actually gone live?',
+    options: [
+      { id: 'yes', label: 'Yes — only the reply got lost' },
+      { id: 'no', label: 'No — no reply means it failed' },
+    ],
+    answer: (s) => (s.world.live.changedBy ? 'yes' : 'no'),
+    explain: (s) =>
+      s.world.live.changedBy
+        ? `The service published the page at ${fmtTime(s.world.live.at!)}; its reply was lost, so ${s.build.agentName} saw a timeout a minute later. A timeout means “no answer”, not “it failed”.`
+        : 'The publish never went out this run.',
+  },
+  medals: [
+    doneMedal('Logo live and checked', 'Find out what happened before giving up — the page might already be live.'),
+    fastMedal(at(18, 13), 'A status check takes 30 seconds; resending takes a minute.'),
+    {
+      id: 'once',
+      icon: '🧾',
+      label: 'Only one publish request',
+      hint: 'Check the status instead of sending the request again.',
+      test: (o) => o.promiseKept && o.publishRequests === 1,
+      measure: (o) => ({
+        you: `${o.promiseKept ? '' : 'job not done · '}${o.publishRequests} request${o.publishRequests === 1 ? '' : 's'}`,
+        goal: 'job done with 1 request',
+      }),
+    },
+  ],
+};
+
+// ---------------------------------------------------------------------------
+// Missions 7–8 — the evening shift under different conditions
+
+const M5F = M5.fixture;
+const M7: Mission = {
+  ...M5,
+  id: 'm7',
+  n: 7,
+  title: 'Early departure',
+  challenge: 'Maya has to leave at 18:24',
+  goal: 'Launch tonight — Maya leaves at 18:24',
+  fixture: {
+    ...M5F,
+    id: 'm7-early-departure',
+    title: 'Early departure',
+    approver: { who: 'maya', until: at(18, 24), replyAfter: 2 * MIN },
+    deadlines: { ...M5F.deadlines, feedback_early: at(18, 24) },
+    availability: { ...M5F.availability, maya: { label: 'Maya reviews drafts until 18:24', until: at(18, 24) } },
+    messages: M5F.messages.map((m) =>
+      m.id === 'm-maya-brief'
+        ? { ...m, body: 'Change of plan — I have to leave at 18:24. Please launch the approved page tonight; I can only review drafts until then. I’d still love the feedback summary before I go, and Nora wants her message.' }
+        : m,
+    ),
+  },
+  prediction: shiftPrediction(at(18, 24)),
+  medals: shiftMedals(at(18, 24), wrapMedal),
+};
+
+const M8: Mission = {
+  ...M5,
+  id: 'm8',
+  n: 8,
+  title: 'Quiet evening',
+  challenge: 'Only 3 easy feedback threads',
+  goal: 'Launch tonight — a quiet evening',
+  fixture: {
+    ...M5F,
+    id: 'm8-quiet-evening',
+    title: 'Quiet evening',
+    feedback: { complete: 3, incomplete: 0 },
+    messages: M5F.messages.map((m) =>
+      m.id === 'm-leo-feedback'
+        ? { ...m, subject: 'Feedback bundle (3 items)', body: 'Only 3 beta-feedback threads tonight, all complete.' }
+        : m.id === 'm-maya-brief'
+          ? { ...m, body: 'Quiet one tonight. Please launch the approved page; Nora would like her partner message, and a quick feedback summary before I leave at 18:40 would be lovely. Don’t overspend.' }
+          : m,
+    ),
+  },
+  medals: shiftMedals(at(18, 40), cheapMedal(26, 'On a quiet evening a second worker mostly waits — and its rent still counts.')),
+};
+
+MISSIONS.push(M6, M7, M8);
+
+export const COMING_SOON = [{ n: 9, title: 'Plans changed', concept: 'memory' as ConceptId }];

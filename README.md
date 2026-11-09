@@ -66,10 +66,21 @@ The same engine powers interactive play and the headless tests.
   the Team machine, and an evaluator for live-page and shift goals. `tests/phase2.test.ts`
   proves e.g. Team + routed earns every medal at 44 credits, Team + big-model sorting runs out
   of credits, and one worker finishes everything cheaply but later.
-- **Next — remaining spec work**: the social-image opportunity, Away mode and admission policies,
-  alternate conditions (Quiet evening, Early departure, Uncertain publication with reconciliation),
-  side-by-side run comparison.
-- **Phase 3 — Layer expansion (Gate C)**: shifts 2–5 (memory, event coalescing, filesystem
+- **Phase 3 — Uncertainty, changed conditions, comparison** ✅
+  6. *Lost reply* — uncertain outcomes (spec “Uncertain publication”): the publish commits but its
+     reply is lost; the player pre-decides the timeout response. Status check confirms with one
+     request; resending with the same key is deduplicated; a brand-new request is blocked by the
+     existing-operation check; giving up reports failure while the page is actually live.
+  7. *Early departure* — Maya leaves at 18:24: only two workers with routed sorting gets the board
+     to her in time.
+  8. *Quiet evening* — 3 easy threads: one worker with routing does everything for 24 credits; a
+     second worker mostly costs rent.
+
+  Results now compare each run with your previous runs of the same mission (medals, credits,
+  finish time). `tests/phase3.test.ts` covers every timeout response and both condition changes.
+- **Next**: the social-image opportunity with an Away-mode admission policy; mission 9 (memory and
+  changed plans); the remaining shifts of the campaign.
+- **Later — Layer expansion (Gate C)**: shifts 2–5 (memory, event coalescing, filesystem
   versions, skills).
-- **Phase 4 — Weekend handoff & release (Gate D)**: capstone, Failure Labs, accessibility polish,
+- **Later — Weekend handoff & release (Gate D)**: capstone, Failure Labs, accessibility polish,
   save import/export UI, performance checks.

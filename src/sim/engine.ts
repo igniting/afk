@@ -81,6 +81,7 @@ export class Sim {
         approvals: [],
         board: null,
         partnerMessage: null,
+        publishRequests: 0,
         latestLogoRevSent: 0,
         mayaThanked: false,
       },
@@ -244,6 +245,8 @@ export class Sim {
         return this.onReaction(ev.cause ?? null);
       case 'approval':
         return this.onApproval(ev.taskId!, ev.cause ?? null);
+      case 'commit':
+        return this.onCommit(ev.taskId!, ev.cause ?? null);
       case 'end':
         this.state.ended = true;
         this.trace({ kind: 'shift', actor: 'world', text: `The evening ends at ${fmtTime(this.state.time)}.` });
@@ -420,6 +423,11 @@ export class Sim {
         this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} waits for the launch receipt. The worker is free meanwhile.` });
         return;
       }
+      const recovery = st.kind === 'check_status' || st.kind === 'resend_same' || st.kind === 'resend_new' || st.kind === 'give_up';
+      if (recovery && !run.notes.unknownOutcome) {
+        task.stepIdx++;
+        continue;
+      }
       const skip =
         run.notes.proposal?.kind === 'no_change' && (st.kind === 'render' || st.kind === 'write_preview');
       if (!skip) break;
@@ -442,6 +450,29 @@ export class Sim {
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, worker: wIdx, text: task.waitLabel });
       task.runs.push({ ...run, finishedAt: s.time });
       task.run = null;
+      return;
+    }
+
+    if (step.kind === 'resend_new' || step.kind === 'give_up') {
+      const newReq = step.kind === 'resend_new';
+      if (newReq) s.blockedProposals++;
+      task.status = 'FAILED';
+      task.waitLabel = newReq
+        ? 'Blocked: a publish for this draft is still unresolved, so a new request would risk a duplicate'
+        : 'Reported failure to Maya without checking';
+      this.trace({
+        kind: newReq ? 'permission' : 'task',
+        actor: 'relay',
+        taskId: task.id,
+        worker: wIdx,
+        text: newReq
+          ? 'Runtime blocks a brand-new publish request: the first one (same draft) is still unresolved. Nothing was sent.'
+          : `${s.build.agentName} tells Maya the publish failed — without checking what actually happened.`,
+        detail: newReq ? 'The existing-operation check prevents blind duplicate publishing. Checking status or reusing the same key would resolve it.' : undefined,
+      });
+      task.runs.push({ ...run, finishedAt: s.time });
+      task.run = null;
+      this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
       return;
     }
 
@@ -489,7 +520,17 @@ export class Sim {
 
     this.charge(credits, `${task.id}: ${stepLabel(step)}`);
     s.ram.usedGB = round1(s.ram.usedGB + info.ramGB);
-    const dur = step.kind === 'publish_live' && !publishAllowed ? 0.5 * MIN : stepDuration(step, s.cores);
+    const pub = this.fixture.publication;
+    const loseReply = step.kind === 'publish_live' && publishAllowed && !!pub?.loseFirstReply && s.world.publishRequests === 0;
+    const dur = step.kind === 'publish_live' && !publishAllowed ? 0.5 * MIN : loseReply ? pub!.timeoutAfter : stepDuration(step, s.cores);
+    if (step.kind === 'publish_live' && publishAllowed) {
+      s.world.publishRequests++;
+      run.notes.requests = (run.notes.requests ?? 0) + 1;
+    }
+    if (step.kind === 'resend_same') {
+      s.world.publishRequests++;
+      run.notes.requests = (run.notes.requests ?? 0) + 1;
+    }
     const purpose = step.purpose ?? 'logo';
     const packet =
       step.kind === 'decide'
@@ -521,6 +562,7 @@ export class Sim {
     };
     task.status = 'RUNNING';
     task.waitLabel = '';
+    if (loseReply) this.enqueue({ t: s.time + pub!.commitAfter, phase: PHASE.commit, kind: 'commit', taskId: task.id, cause: traceId });
     this.enqueue({
       t: s.time + dur,
       phase: step.kind.startsWith('verify') ? PHASE.verify : PHASE.reply,
@@ -603,12 +645,16 @@ export class Sim {
             return this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
           }
           const so = (n.sorted ??= { complete: 0, incomplete: 0, reduced: false });
-          if (purpose === 'sort_complete') so.complete += 3;
-          if (purpose === 'sort_incomplete') so.incomplete += 3;
+          const fb = this.feedbackLoad();
+          if (purpose === 'sort_complete') so.complete = Math.min(fb.complete, so.complete + 3);
+          if (purpose === 'sort_incomplete') so.incomplete = fb.incomplete;
           if (purpose === 'sort_all') {
-            const take = Math.min(4, 12 - so.complete - so.incomplete);
-            so.complete += Math.min(take, 3);
-            so.incomplete += take - Math.min(take, 3);
+            // Mixed batches of 4: complete threads first, then the incomplete ones.
+            let take = 4;
+            const c = Math.min(take, fb.complete - so.complete);
+            so.complete += c;
+            take -= c;
+            so.incomplete += Math.min(take, fb.incomplete - so.incomplete);
           }
           if (purpose === 'reduce') so.reduced = true;
           break;
@@ -717,6 +763,20 @@ export class Sim {
         break;
       }
       case 'publish_live': {
+        if (a.credits > 0 && n.written && n.approval && s.world.live.changedBy && s.world.live.approvedVersion === n.approval.version && this.fixture.publication?.loseFirstReply && (n.requests ?? 0) === 1) {
+          // The commit already happened (see onCommit) but the reply never came back.
+          n.unknownOutcome = true;
+          this.trace({
+            kind: 'task',
+            actor: 'relay',
+            taskId: task.id,
+            worker: wIdx,
+            text: `No reply from the live-page service after ${Math.round((a.end - a.start) / MIN)} minutes. Outcome unknown — did it publish or not?`,
+            detail: 'A timeout is not the same as a failure: the request may have succeeded after the reply was lost.',
+            cause,
+          });
+          break;
+        }
         if (a.credits > 0 && n.written && n.approval) {
           s.world.live = {
             version: s.world.live.version + 1,
@@ -768,18 +828,53 @@ export class Sim {
           this.trace({ kind: 'verify', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Verification failed: the live page did not change.', cause });
         break;
       }
-      case 'read_feedback':
+      case 'check_status':
+        n.reconciled = !!s.world.live.changedBy;
+        this.trace({
+          kind: 'verify',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: s.world.live.changedBy
+            ? `Status lookup: request op-${task.id}-publish was committed at ${fmtTime(s.world.live.at!)}. It did publish — only the reply was lost.`
+            : 'Status lookup: the request was never committed.',
+          cause,
+        });
+        break;
+      case 'resend_same':
+        n.reconciled = !!s.world.live.changedBy;
+        this.trace({
+          kind: 'task',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: `Resent with the same key op-${task.id}-publish. The service recognised it and returned the original result — no second publish, no extra charge.`,
+          cause,
+        });
+        break;
+      case 'read_feedback': {
         n.feedbackRead = true;
-        this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Fetched 12 feedback items: 9 complete threads, 3 incomplete.', cause });
+        const fb = this.feedbackLoad();
+        this.trace({
+          kind: 'step_done',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: `Fetched ${fb.complete + fb.incomplete} feedback items: ${fb.complete} complete thread${fb.complete === 1 ? '' : 's'}${fb.incomplete ? `, ${fb.incomplete} incomplete` : ''}.`,
+          cause,
+        });
+        break;
+      }
         break;
       case 'save_board': {
         const so = n.sorted ?? { complete: 0, incomplete: 0, reduced: false };
         const items = so.complete + so.incomplete;
         s.world.board = { items, at: s.time };
-        if (items >= 12 && so.reduced) {
+        const total = this.feedbackLoad().complete + this.feedbackLoad().incomplete;
+        if (items >= total && so.reduced) {
           n.receipt = { version: 1, logoRev: 0, at: s.time };
-          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Feedback board saved: all 12 items sorted. Receipt stored.', cause });
-        } else this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `Feedback board saved with only ${items}/12 items sorted.`, cause });
+          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `Feedback board saved: all ${total} items sorted. Receipt stored.`, cause });
+        } else this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `Feedback board saved with only ${items}/${total} items sorted.`, cause });
         break;
       }
       case 'read_draft':
@@ -856,6 +951,27 @@ export class Sim {
       task.waitLabel = '';
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} done for revision ${run.logoRev}. No watcher remains armed for it.` });
     }
+  }
+
+  feedbackLoad(): { complete: number; incomplete: number } {
+    return this.fixture.feedback ?? { complete: 9, incomplete: 3 };
+  }
+
+  /** The external service commits the publish even though its reply will be lost. */
+  private onCommit(taskId: string, cause: number | null) {
+    const s = this.state;
+    const n = s.tasks.find((t) => t.id === taskId)?.run?.notes;
+    if (!n?.written || !n.approval) return;
+    s.world.live = { version: s.world.live.version + 1, changedBy: s.build.agentName, logoRev: n.written.logoRev, approvedVersion: n.approval.version, at: s.time };
+    this.trace({
+      kind: 'write',
+      actor: 'world',
+      taskId,
+      text: `Live page published: draft v${n.written.version} (key op-${taskId}-publish). The service’s reply is lost on the way back.`,
+      detail: `${s.build.agentName} has not observed this: it is still waiting for a reply.`,
+      observerOnly: true,
+      cause,
+    });
   }
 
   private launchDone(): boolean {

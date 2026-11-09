@@ -11,7 +11,7 @@ export interface Issue {
   message: string;
 }
 
-export const MAX_STEPS = 8;
+export const MAX_STEPS = 9;
 
 export function validateProcedure(proc: StepDef[], goal: Fixture['goal'] = 'preview'): Issue[] {
   const issues: Issue[] = [];

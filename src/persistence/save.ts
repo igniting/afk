@@ -27,6 +27,17 @@ export interface SaveData {
   missions?: Record<string, { medals: string[]; completed: boolean }>;
   concepts?: string[];
   predictions?: { right: number; total: number };
+  /** Recent runs per mission, for honest same-conditions comparison. */
+  missionRuns?: Record<string, MissionRun[]>;
+}
+
+export interface MissionRun {
+  at: string;
+  plan: string;
+  medals: string[];
+  credits: number;
+  doneAt: number | null;
+  ok: boolean;
 }
 
 export function defaultSave(): SaveData {
