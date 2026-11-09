@@ -1364,19 +1364,16 @@ export class App {
     };
     const shiftOf = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
     let lastShift = '';
-    const cards = MISSIONS.map((m, i) => {
+    const cards = MISSIONS.map((m) => {
       const p = this.progress(m.id);
-      // A mission opens when the nearest earlier non-challenge mission is done; challenges never block progress.
-      let prev = i - 1;
-      while (prev > 0 && MISSIONS[prev].challenge) prev--;
-      const unlocked = i === 0 || this.progress(MISSIONS[prev].id).completed || this.progress(MISSIONS[i - 1].id).completed;
+      // Every mission is open: players may skip ahead (earlier missions just explain the ideas first).
       const sh = shiftOf(m);
       const heading = sh !== lastShift ? `<h3 class="shift-head">${SHIFTS[sh]}</h3>` : '';
       lastShift = sh;
       const concept = CONCEPTS.find((c) => c.id === m.concept)!;
       const medals = m.medals.map((md) => `<span class="medal ${p.medals.includes(md.id) ? 'got' : ''}" title="${esc(md.label)}">${md.icon}</span>`).join('');
-      return `${heading}<button class="mission-card ${unlocked ? '' : 'locked'} ${p.completed ? 'complete' : ''}" ${unlocked ? `data-action="mission" data-arg="${m.id}"` : 'disabled'}>
-        <span class="mnum">${unlocked ? m.n : '🔒'}</span>
+      return `${heading}<button class="mission-card ${p.completed ? 'complete' : ''}" data-action="mission" data-arg="${m.id}">
+        <span class="mnum">${m.n}</span>
         <span class="mbody"><b>${esc(m.title)}</b><span class="muted small">${m.challenge ? `⚡ Challenge: ${esc(m.challenge)}` : `${concept.icon} ${esc(concept.title)}`}</span></span>
         <span class="medals" aria-label="${p.medals.length} of 3 medals">${medals}</span>
       </button>`;
@@ -1386,11 +1383,11 @@ export class App {
     ).join('');
     const labCards = LABS.map((l) => {
       const after = MISSIONS.find((m) => m.id === l.lab.after)!;
-      const open = this.progress(after.id).completed;
+      const ready = this.progress(after.id).completed;
       const tried = this.save.labs?.[l.id] ?? [];
-      const status = !open ? `Opens after mission ${after.n}` : tried.length >= 2 ? '✓ Both versions run' : tried.length ? 'Now run the other version' : `Removes ${l.lab.removes}`;
-      return `<button class="mission-card lab ${open ? '' : 'locked'} ${tried.length >= 2 ? 'complete' : ''}" ${open ? `data-action="mission" data-arg="${l.id}"` : 'disabled'}>
-        <span class="mnum">${open ? '🧪' : '🔒'}</span>
+      const status = tried.length >= 2 ? '✓ Both versions run' : tried.length ? 'Now run the other version' : `Removes ${l.lab.removes}${ready ? '' : ` · best after mission ${after.n}`}`;
+      return `<button class="mission-card lab ${tried.length >= 2 ? 'complete' : ''}" data-action="mission" data-arg="${l.id}">
+        <span class="mnum">🧪</span>
         <span class="mbody"><b>${esc(l.title)}</b><span class="muted small">${esc(status)}</span></span>
         <span class="medals lab-dots" aria-label="${tried.length} of 2 versions run">${['on', 'off'].map((v) => `<span class="dot ${tried.includes(v) ? 'got' : ''}" title="${v === 'on' ? esc(l.lab.on) : esc(l.lab.off)}">${v === 'on' ? '🛡️' : '🧪'}</span>`).join('')}</span>
       </button>`;
@@ -1690,7 +1687,9 @@ export class App {
           ${
             next && o.promiseKept
               ? `<button class="btn choice primary-choice" data-action="next-mission"><b>Next mission →</b><span>${esc(next.title)}</span></button>`
-              : `<button class="btn choice" data-action="map"><b>Missions</b><span>See your medals and field guide.</span></button>`
+              : next
+                ? `<button class="btn choice" data-action="next-mission"><b>Skip to next →</b><span>${esc(next.title)}</span></button>`
+                : `<button class="btn choice" data-action="map"><b>Missions</b><span>See your medals and field guide.</span></button>`
           }
         </div>
       </div>`);

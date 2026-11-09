@@ -51,7 +51,7 @@ The same engine powers interactive play and the headless tests.
 
   Each mission has a guided build, a prediction before you run, three medals tied to real tradeoffs
   (finish / spend less / finish sooner / need no help), and a field-guide card you unlock. Missions
-  unlock in order. **Customize…** reveals the full controls (step editor, models, context rules,
+  are all open — play in order or skip ahead. **Customize…** reveals the full controls (step editor, models, context rules,
   CPU/RAM, journal, timeline, inspector, rewind, live edits). `tests/missions.test.ts` proves which
   builds earn which medals.
 - **Phase 2 — Permissions and the evening shift** ✅ Two more missions on the same engine:
@@ -93,7 +93,7 @@ The same engine powers interactive play and the headless tests.
 
   `tests/campaign.test.ts` proves, for every mission, which builds earn which medals.
 - **Phase 5 — Failure Labs** ✅ (spec §6.4, `src/content/labs.ts`) Five optional, disposable
-  experiments on the mission map. Each opens after the mission that teaches its protection,
+  experiments on the mission map, each suggested after the mission that teaches its protection;
   replays the same small evening with the protection on and then removed, and awards no medals.
   - *Forgotten rule* (after 4): the rule left off the tray → the gate blocks; no gate → a violation.
   - *Blind retry* (after 6): a lost reply plus a blind resend → Nora gets two copies.
