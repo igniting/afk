@@ -252,7 +252,7 @@ export class BoardScene {
   }
 
   private buildBench() {
-    for (const i of [0, 1]) {
+    for (const i of [0, 1, 2, 3]) {
       const b = new BenchView(i);
       tag(b.group, { kind: 'worker', idx: i });
       tag(b.tray, { kind: 'context', idx: i });
@@ -269,7 +269,11 @@ export class BoardScene {
   private layoutBenches(count: number) {
     this.benches.forEach((b, i) => {
       b.group.visible = i < count;
-      if (count > 1) {
+      if (count > 2) {
+        // Four benches in a 2 × 2 grid on the workbench pad.
+        b.group.position.set(POS.bench.x + (i % 2 === 0 ? -1.25 : 1.25), 0, POS.bench.z + (i < 2 ? -0.75 : 1.15));
+        b.group.scale.setScalar(0.52);
+      } else if (count > 1) {
         b.group.position.set(POS.bench.x + (i === 0 ? -1.25 : 1.25), 0, POS.bench.z);
         b.group.scale.setScalar(0.64);
       } else {
@@ -477,7 +481,8 @@ export class BoardScene {
       if (!wk) return;
       const jobs = wk.responsibilities.filter((r) => r === 'preview_logo' || r === 'launch' || build.accepted?.includes(r));
       const names: Record<string, string> = { preview_logo: 'logo', launch: 'launch', feedback: 'feedback', partner: 'Nora' };
-      this.benches[i].setName(count > 1 || jobs.length > 1 ? `W${i + 1}: ${jobs.map((j) => names[j]).join(' + ')}` : `${build.agentName} · worker`);
+      const label = jobs.length > 2 ? `${jobs.length} jobs` : jobs.map((j) => names[j] ?? j.replace(/_/g, ' ')).join(' + ');
+      this.benches[i].setName(count > 1 || jobs.length > 1 ? `W${i + 1}: ${label}` : `${build.agentName} · worker`);
     });
     if (!this.sim) {
       this.benches.forEach((b) => b.reset());
@@ -595,16 +600,24 @@ export class BoardScene {
     }
 
     // Waiting hook: jobs parked on a person or an event, with no worker held.
-    const waiting = s.tasks.filter((t) => t.status === 'WAITING_EVENT' || t.status === 'WAITING_APPROVAL' || t.status === 'WAITING_BUDGET');
+    // Only work that is actually parked shows on the hook (not jobs that haven't been triggered yet).
+    const waiting = s.tasks.filter(
+      (t) =>
+        (t.status === 'WAITING_EVENT' && t.run) ||
+        t.status === 'WAITING_APPROVAL' ||
+        t.status === 'WAITING_PERSON' ||
+        t.status === 'WAITING_BUDGET' ||
+        (t.status === 'WAITING_EVENT' && !t.runs.length && t.waitLabel !== 'Waiting for its trigger'),
+    );
     this.hook.visible = waiting.length > 0;
     if (waiting.length) {
       const short = (t: (typeof waiting)[number]) =>
-        t.status === 'WAITING_APPROVAL' ? 'Maya’s OK' : t.status === 'WAITING_BUDGET' ? 'credits (budget spent)' : t.waitLabel.replace(/^Keeping current: waiting for /, '').replace(/^Waiting for /, '');
+        t.status === 'WAITING_APPROVAL' ? 'Maya’s OK' : t.status === 'WAITING_BUDGET' ? 'credits (budget spent)' : t.waitLabel.replace(/^Keeping current: waiting for /, '').replace(/^Waiting for /i, '').replace(/^Wait (until|for) /i, '');
       const multi = s.tasks.length > 1;
       this.hookLabel.element.textContent = this.detail
         ? waiting.map((t) => `${t.id} waits: ${short(t)}`).join(' · ') + ` · ${this.fixtureAvailability(sim)}`
         : multi
-          ? `Waiting: ${waiting.map(short).join(' · ')}`
+          ? `Waiting: ${waiting.slice(0, 3).map(short).join(' · ')}${waiting.length > 3 ? ` +${waiting.length - 3}` : ''}`
           : `Waiting for ${short(waiting[0])}`;
       if (!this.reduceMotion) this.hook.rotation.z = Math.sin(this.now / 700) * 0.04;
     }
@@ -616,6 +629,7 @@ export class BoardScene {
       if (!b) return;
       const t = w.active ? s.tasks.find((x) => x.id === w.active!.taskId) : null;
       const short: Record<string, string> = { preview_logo: '', launch: 'Launch', feedback: 'Feedback', partner: 'Partner' };
+      if (t && !(t.responsibility in short)) short[t.responsibility] = t.title.split(' ').slice(0, 2).join(' ');
       const name = s.workers.length > 1 ? `W${w.idx + 1}` : s.build.agentName;
       b.project({
         active: w.active,

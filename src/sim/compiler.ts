@@ -3,6 +3,7 @@
 import type { Build, Fixture, StepDef } from './types';
 import { MACHINES } from './types';
 import { stepCredits, stepDuration } from './steps';
+import { getRule } from './genericRules';
 
 export interface Issue {
   level: 'error' | 'warn';
@@ -85,6 +86,28 @@ export function validateProcedure(proc: StepDef[], goal: Fixture['goal'] = 'prev
 export function validateBuild(build: Build, fixture?: Fixture): Issue[] {
   const issues: Issue[] = [];
   const goal = fixture?.goal ?? 'preview';
+  if (goal === 'jobs') {
+    // Data-driven missions: every assigned job needs a procedure, and every rule must exist.
+    const m = MACHINES[build.machine];
+    if (build.workers.filter(Boolean).length > m.workerSlots)
+      issues.push({ level: 'error', where: 'machine', message: `The ${m.name} machine has ${m.workerSlots} worker slot(s).` });
+    for (const w of build.workers) {
+      if (!w) continue;
+      for (const r of w.responsibilities) {
+        const proc = w.procedures?.[r];
+        if (!proc?.length) issues.push({ level: 'error', where: 'procedure', message: `Job “${r}” has no procedure.` });
+        for (const st of proc ?? [])
+          if (st.op?.type === 'decide') {
+            try {
+              getRule(st.op.rule);
+            } catch {
+              issues.push({ level: 'error', where: 'procedure', message: `Unknown decision rule “${st.op.rule}”.` });
+            }
+          }
+      }
+    }
+    return issues;
+  }
   if (goal === 'shift') {
     // Shift procedures come from content; check the machine and watcher only.
     const m = MACHINES[build.machine];

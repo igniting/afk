@@ -7,7 +7,7 @@ import { OPENING } from './opening';
 
 export const TAGLINE = 'Light up launch night.';
 
-export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel' | 'uncertainty';
+export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel' | 'uncertainty' | 'attention' | 'workshop' | 'skills' | 'weekend';
 
 export interface Concept {
   id: ConceptId;
@@ -102,7 +102,7 @@ export interface Medal {
 const jobState = (o: OpeningOutcome) =>
   o.promiseKept ? 'done' : o.previewRev && !o.taglineOk ? 'tagline missing' : o.previewRev && o.previewRev < o.latestSent ? 'old logo on the page' : o.previewRev ? 'not finished' : 'no logo on the page';
 
-const doneMedal = (label: string, hint: string): Medal => ({
+export const doneMedal = (label: string, hint: string): Medal => ({
   id: 'done',
   icon: '🏁',
   label,
@@ -110,7 +110,7 @@ const doneMedal = (label: string, hint: string): Medal => ({
   test: (o) => o.promiseKept,
   measure: (o) => ({ you: jobState(o), goal: 'job done' }),
 });
-const cheapMedal = (limit: number, hint: string): Medal => ({
+export const cheapMedal = (limit: number, hint: string): Medal => ({
   id: 'cheap',
   icon: '💰',
   label: `Spend ${limit} credits or less`,
@@ -119,7 +119,7 @@ const cheapMedal = (limit: number, hint: string): Medal => ({
   test: (o) => o.promiseKept && o.creditsSpent <= limit,
   measure: (o) => ({ you: o.promiseKept ? `${o.creditsSpent} credits` : `job not done (${o.creditsSpent} credits)`, goal: `≤ ${limit} credits` }),
 });
-const fastMedal = (by: Ms, hint: string): Medal => ({
+export const fastMedal = (by: Ms, hint: string): Medal => ({
   id: 'fast',
   icon: '⚡',
   label: `Checked by ${fmtTime(by)}`,
@@ -148,6 +148,15 @@ export interface Prediction {
   explain(s: SimState): string;
 }
 
+export interface Choice {
+  id: string;
+  title: string;
+  prompt: string;
+  options: { id: string; label: string; desc: string; cost?: string }[];
+  /** Only ask when an earlier pick makes it relevant. */
+  showIf?: (picks: Record<string, string>) => boolean;
+}
+
 export interface Mission {
   id: string;
   n: number;
@@ -164,6 +173,11 @@ export interface Mission {
   askRecovery?: boolean;
   /** Variant of an earlier mission with changed conditions. */
   challenge?: string;
+  /** Data-driven missions (9+): Relay is already set up; the player makes these choices. */
+  choices?: Choice[];
+  makeBuild?: (base: Build, picks: Record<string, string>) => Build;
+  /** Shift number in the campaign (for grouping on the map). */
+  shiftNo?: number;
   /** Shift missions build from job/machine/sorting choices instead of a single procedure. */
   shift?: boolean;
   prediction: Prediction;
@@ -171,7 +185,7 @@ export interface Mission {
 }
 
 const baseMessages = OPENING.messages.filter((m) => m.id !== 'm-isha-r2');
-const brief = (body: string) =>
+export const brief = (body: string) =>
   baseMessages.map((m) => (m.id === 'm-maya-brief' ? { ...m, body } : m));
 
 const decideMinutes = (s: SimState) =>
@@ -652,4 +666,4 @@ const M8: Mission = {
 
 MISSIONS.push(M6, M7, M8);
 
-export const COMING_SOON = [{ n: 9, title: 'Plans changed', concept: 'memory' as ConceptId }];
+export const COMING_SOON: { n: number; title: string; concept: ConceptId }[] = [];

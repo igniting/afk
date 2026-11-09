@@ -180,9 +180,11 @@ export class BenchView {
       this.progress.position.x = -0.5 + 0.5 * this.progress.scale.x;
       const left = Math.max(0, active.end - opts.time) / 1000;
       const step =
-        active.step.kind === 'decide' && active.step.purpose && active.step.purpose !== 'logo'
-          ? PURPOSE_LABEL[active.step.purpose]
-          : STEP_INFO[active.step.kind].label;
+        active.step.kind === 'op'
+          ? active.step.op!.label + (active.cpu && active.rate != null && active.rate < 1 ? ` (${Math.round(active.rate * 100)}% CPU)` : '')
+          : active.step.kind === 'decide' && active.step.purpose && active.step.purpose !== 'logo'
+            ? PURPOSE_LABEL[active.step.purpose]
+            : STEP_INFO[active.step.kind].label;
       const job = opts.taskTitle ? `${opts.taskTitle}: ` : '';
       this.taskLabel.element.textContent = detail
         ? `${active.taskId} · ${step} · ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')} left`

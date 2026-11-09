@@ -400,3 +400,8 @@ code { font-size: 13px; background: #0e182c; padding: 1px 5px; border-radius: 4p
 .compare-runs tr.current td { font-weight: 600; }
 .compare-runs .medal { font-size: 15px; }
 .challenge { background: #2a240b; border: 1px solid #5b4f13; border-radius: 10px; padding: 8px 12px; text-align: left; }
+
+.shift-head { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 4px; }
+.setup-note { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+li.superseded { text-decoration: line-through; opacity: .6; }
+.guide h2.prompt { font-size: 18px; line-height: 1.35; font-weight: 600; }

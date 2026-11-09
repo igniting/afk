@@ -78,9 +78,18 @@ The same engine powers interactive play and the headless tests.
 
   Results now compare each run with your previous runs of the same mission (medals, credits,
   finish time). `tests/phase3.test.ts` covers every timeout response and both condition changes.
-- **Next**: the social-image opportunity with an Away-mode admission policy; mission 9 (memory and
-  changed plans); the remaining shifts of the campaign.
-- **Later — Layer expansion (Gate C)**: shifts 2–5 (memory, event coalescing, filesystem
-  versions, skills).
-- **Later — Weekend handoff & release (Gate D)**: capstone, Failure Labs, accessibility polish,
-  save import/export UI, performance checks.
+- **Phase 4 — The full campaign (23 missions)** ✅ Shifts 2–6 of the spec, each as an intro
+  mission, the shift itself, and a challenge variant, built on a data-driven job engine
+  (`src/content/campaign.ts`): read sources with retrieval rules, decide (rules read only the
+  tray), local CPU work with fair core sharing, RAM admission, versioned writes with stale-write
+  rejection, sends, approvals, questions to people with availability windows, durable waits,
+  cancellation, notifications, quiet-interval/restart/queue policies, and precommitted admission
+  of mid-shift opportunities (Away mode).
+  - Shift 2 *Plans changed* (9–11): memory, authority, supersession; facts that change mid-shift.
+  - Shift 3 *The noisy evening* (12–14): coalescing updates, urgent priority, digests vs pings.
+  - Shift 4 *Shared workshop* (15–17): two workers on one file, CPU sharing, RAM, machine sizing.
+  - Shift 5 *A procedure worth keeping* (18–20): skills, loading one vs all, adapting to new formats.
+  - Shift 6 *The weekend handoff* (21–23): admission control, multi-day durable waits, selective escalation.
+
+  `tests/campaign.test.ts` proves, for every mission, which builds earn which medals.
+- **Later**: Failure Labs, save import/export UI, accessibility polish, performance checks.

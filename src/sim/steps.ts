@@ -244,6 +244,17 @@ export const STEP_INFO: Record<StepKind, StepInfo> = {
     credits: 0,
     remote: false,
   },
+  op: {
+    kind: 'op',
+    label: 'Step',
+    verb: 'Working',
+    explain: 'A data-driven step; its label, time and cost come from the mission.',
+    duration: 0.5 * MIN,
+    cpuMinutes: 0,
+    ramGB: 0.1,
+    credits: 0,
+    remote: false,
+  },
   publish_live: {
     kind: 'publish_live',
     label: 'Publish to live page',
@@ -257,7 +268,38 @@ export const STEP_INFO: Record<StepKind, StepInfo> = {
   },
 };
 
+/** Time, credits, RAM and remoteness of a generic operation. */
+export function opInfo(step: StepDef): { minutes: number; cpuMinutes: number; ioMinutes: number; credits: number; ramGB: number; remote: boolean; label: string } {
+  const op = step.op!;
+  const base = { minutes: 0.5, cpuMinutes: 0, ioMinutes: 0, credits: 0, ramGB: 0.1, remote: false, label: op.label };
+  switch (op.type) {
+    case 'read':
+    case 'readArtifact':
+      return { ...base, minutes: op.minutes ?? 0.5 };
+    case 'decide': {
+      const m = MODELS[step.model ?? 'swift'];
+      return { ...base, minutes: m.duration / MIN, credits: m.credits, remote: true };
+    }
+    case 'local':
+      return { ...base, minutes: 0, cpuMinutes: op.cpuMinutes, ioMinutes: op.ioMinutes ?? 0, credits: op.credits, ramGB: op.ramGB };
+    case 'write':
+      return { ...base, minutes: op.minutes ?? 1, credits: op.credits ?? 1 };
+    case 'send':
+      return { ...base, minutes: op.minutes ?? 0.5, credits: op.credits ?? 1 };
+    case 'cancel':
+    case 'waitJob':
+    case 'waitEvent':
+      return { ...base, minutes: 0, ramGB: 0 };
+    default:
+      return base;
+  }
+}
+
 export function stepDuration(step: StepDef, cores: number): number {
+  if (step.kind === 'op') {
+    const i = opInfo(step);
+    return (i.cpuMinutes * MIN) / Math.min(1, cores) + (i.minutes + i.ioMinutes) * MIN;
+  }
   if (step.kind === 'decide') return MODELS[step.model ?? 'swift'].duration;
   const info = STEP_INFO[step.kind];
   if (info.cpuMinutes > 0) return (info.cpuMinutes * MIN) / Math.min(1, cores);
@@ -265,6 +307,7 @@ export function stepDuration(step: StepDef, cores: number): number {
 }
 
 export function stepCredits(step: StepDef): number {
+  if (step.kind === 'op') return opInfo(step).credits;
   if (step.kind === 'decide') return MODELS[step.model ?? 'swift'].credits;
   return STEP_INFO[step.kind].credits;
 }
@@ -281,6 +324,7 @@ export const PURPOSE_LABEL: Record<string, string> = {
 };
 
 export function stepLabel(step: StepDef): string {
+  if (step.kind === 'op') return step.op!.label + (step.op!.type === 'decide' ? ` · ${MODELS[step.model ?? 'swift'].name}` : '');
   if (step.kind === 'decide')
     return `${step.purpose && step.purpose !== 'logo' ? PURPOSE_LABEL[step.purpose] : 'Decide'} · ${MODELS[step.model ?? 'swift'].name}`;
   return STEP_INFO[step.kind].label;

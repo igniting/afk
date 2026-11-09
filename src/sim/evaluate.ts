@@ -1,6 +1,6 @@
 // Evaluator: judges outcomes from WORLD state and stored receipts — never from which
 // settings the player chose (spec §15.2).
-import type { Ms, Responsibility, SimState } from './types';
+import { fmtTime, type Fixture, type Ms, type Responsibility, type SimState } from './types';
 
 export interface JobResult {
   id: Responsibility;
@@ -34,7 +34,11 @@ export interface OpeningOutcome {
   publishRequests: number;
 }
 
-export function evaluateOpening(s: SimState, deadlines: Partial<Record<Responsibility | 'feedback_early', Ms>> = {}): OpeningOutcome {
+export function evaluateOpening(
+  s: SimState,
+  deadlines: Partial<Record<Responsibility | 'feedback_early', Ms>> = {},
+  fixture?: Fixture,
+): OpeningOutcome {
   const receipts = s.tasks
     .filter((t) => t.responsibility === 'preview_logo' || t.responsibility === 'launch')
     .flatMap((t) => t.runs.map((r) => r.notes.receipt).filter(Boolean)) as { version: number; logoRev: number; at: Ms }[];
@@ -70,9 +74,45 @@ export function evaluateOpening(s: SimState, deadlines: Partial<Record<Responsib
       return { id, accepted: !!t, doneAt, deadline, ok: !!t && doneAt != null && (deadline == null || doneAt <= deadline), status };
     });
 
+  if (s.goal === 'jobs' && fixture?.jobs) {
+    // Data-driven jobs: each is judged by its own world-state check and deadline.
+    for (const j of fixture.jobs.filter((x) => !x.internal)) {
+      const t = s.tasks.find((x) => x.responsibility === j.id);
+      const last = t ? [...t.runs].reverse().find((r) => r.notes.receipt) : undefined;
+      const doneAt = t?.status === 'DONE' && last ? last.notes.receipt!.at : null;
+      const check = j.check(s);
+      const status = !t
+        ? j.offer
+          ? 'not taken on'
+          : 'declined'
+        : !check.ok && doneAt != null
+          ? check.status
+          : doneAt != null
+            ? j.deadline != null && doneAt > j.deadline
+              ? `late (due ${fmtTime(j.deadline)})`
+              : 'done'
+            : t.status === 'WAITING_BUDGET'
+              ? 'ran out of credits'
+              : t.status === 'WAITING_PERSON'
+                ? 'waiting for an answer'
+                : t.status === 'CANCELLED'
+                  ? 'cancelled'
+                  : t.status === 'FAILED'
+                    ? (t.waitLabel || 'failed').toLowerCase()
+                    : 'not finished';
+      jobs.push({ id: j.id, accepted: !!t, doneAt, deadline: j.deadline ?? null, ok: !!t && check.ok && doneAt != null && (j.deadline == null || doneAt <= j.deadline), status });
+    }
+  }
+
   let promiseKept: boolean;
   let firstVerifiedAt: Ms | null = receipts[0]?.at ?? null;
-  if (s.goal === 'live') {
+  if (s.goal === 'jobs' && fixture?.jobs) {
+    const required = fixture.jobs.filter((j) => j.required && !j.internal);
+    const req = jobs.filter((r) => required.some((j) => j.id === r.id));
+    promiseKept = req.every((r) => r.ok) && within && hardViolations.length === 0;
+    const done = req.map((r) => r.doneAt).filter((x): x is Ms => x != null);
+    firstVerifiedAt = done.length === req.length && done.length ? Math.max(...done) : null;
+  } else if (s.goal === 'live') {
     promiseKept = latestSent > 0 && live.logoRev === latestSent && liveApproved && !!latestReceipt && within && hardViolations.length === 0;
   } else if (s.goal === 'shift') {
     const launch = jobs.find((j) => j.id === 'launch')!;

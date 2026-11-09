@@ -5,7 +5,8 @@ import { forecastProcedure, isRunnable, validateBuild, MAX_STEPS } from '../sim/
 import { ADDABLE_STEPS, STEP_INFO, stepCredits, stepDuration, stepLabel } from '../sim/steps';
 import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type Fixture, type StepKind, type TraceEntry, type WorkerCfg } from '../sim/types';
 import { TEMPLATES, emptyBuild, setGuide } from '../content/opening';
-import { CONCEPTS, COMING_SOON, MISSIONS, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
+import { CONCEPTS, COMING_SOON, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
+import { MISSIONS } from '../content/campaign';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
@@ -74,6 +75,8 @@ export class App {
   private askMaya: boolean | null = null;
   /** Mission 6: what to do if the publish reply never comes. */
   private recovery: Recovery | null = null;
+  /** Data-driven missions: the player's picks for each choice. */
+  private picks: Record<string, string> = {};
   /** Mission 5: jobs, machine and feedback sorting. */
   private shift: ShiftChoices = { accepted: ['launch'], machine: 'compact', sorting: 'routed' };
 
@@ -113,8 +116,12 @@ export class App {
     this.lastFrame = now;
     const sim = this.sim;
     if (this.mode === 'run' && sim && this.playing && !sim.state.ended) {
-      // 1 real second = 1 simulated minute at 1×.
-      sim.runUntil(sim.state.time + Math.round(dt * 60 * this.speed));
+      // 1 real second = 1 simulated minute at 1×. Long idle stretches (nights) pass in a couple of seconds.
+      const next = sim.nextEventTime();
+      const idle = sim.state.workers.every((w) => !w.active);
+      const gap = next != null ? next - sim.state.time : 0;
+      const boost = idle && gap > 10 * MIN ? (gap * dt) / 1200 : 0;
+      sim.runUntil(sim.state.time + Math.max(Math.round(dt * 60 * this.speed), Math.round(boost)));
       if (sim.state.ended) this.playing = false;
     }
     if (sim) this.handleNewTrace(sim);
@@ -147,6 +154,10 @@ export class App {
       else if (e.kind === 'permission') this.toast('Permission gate: Maya approved this exact draft — it may go live.', 'good');
       else if (e.kind === 'budget') this.toast('Out of credits: a job is stuck. The budget is a hard limit.', 'warn');
       else if (e.kind === 'task' && /Outcome unknown/.test(e.text)) this.toast('No reply from the live-page service. Did it publish or not?', 'warn');
+      else if (e.kind === 'task' && /^Admission/.test(e.text)) this.toast(e.text.replace(/^Admission \([^)]*\): /, 'New request: '), /accepted/.test(e.text) ? 'good' : 'info');
+      else if (e.kind === 'write' && /Write rejected/.test(e.text)) this.toast('A save based on an old version was rejected — nothing was overwritten.', 'warn');
+      else if (e.kind === 'task' && /^Cancelled/.test(e.text)) this.toast(e.text, 'good');
+      else if (e.kind === 'world' && /URGENT/.test(e.text)) this.toast('Urgent message from Leo!', 'warn');
     }
   }
 
@@ -259,10 +270,11 @@ export class App {
   // Promise rail
 
   private promiseCards(): string[] {
+    if (this.mission.choices) return this.genericJobCards();
     if (this.mission.shift) return this.jobCards();
     if (this.fx.goal === 'live') return this.liveCards();
     const s = this.sim?.state;
-    const o = s ? evaluateOpening(s, this.fx.deadlines) : null;
+    const o = s ? evaluateOpening(s, this.fx.deadlines, this.fx) : null;
     const t = s?.time ?? this.fx.start;
     const margin = Math.max(0, (this.fx.end - t) / MIN);
     let status = 'Isha will email the logo around 18:02.';
@@ -315,9 +327,45 @@ export class App {
     return [p1, p2];
   }
 
+  private genericJobCards(): string[] {
+    const s = this.sim?.state;
+    const o = s ? evaluateOpening(s, this.fx.deadlines, this.fx) : null;
+    return (this.fx.jobs ?? [])
+      .filter((j) => !j.internal)
+      .filter((j) => !s || j.offer || s.tasks.some((t) => t.responsibility === j.id) || j.required)
+      .filter((j) => s || j.required || j.offer || this.build.accepted?.includes(j.id))
+      .map((j) => {
+        const t = s?.tasks.find((x) => x.responsibility === j.id);
+        const r = o?.jobs.find((x) => x.id === j.id);
+        const active = s?.workers.find((w) => w.active?.taskId === t?.id)?.active;
+        let status = j.offer ? 'May be offered during the shift.' : 'Waiting for its moment.';
+        let cls = '';
+        if (r?.ok) {
+          status = `✓ Done${r.doneAt != null ? ` at ${fmtTime(r.doneAt)}` : ''}`;
+          cls = 'good';
+        } else if (r && r.doneAt != null) {
+          status = `✗ ${esc(r.status)}`;
+          cls = 'bad';
+        } else if (j.offer && s && !t && s.trace.some((e) => /Admission/.test(e.text) && e.text.includes(j.title))) {
+          status = 'Declined by your admission rule.';
+        } else if (active) status = `Working: ${esc(stepLabel(active.step).replace(/ · .*/, ''))}…`;
+        else if (t?.status === 'WAITING_PERSON' || t?.status === 'WAITING_APPROVAL') status = `⏳ ${esc(t.waitLabel)}`;
+        else if (t?.status === 'WAITING_BUDGET') {
+          status = '✗ Out of credits';
+          cls = 'bad';
+        } else if (t?.status === 'WAITING_EVENT' && t.run) status = `⏳ ${esc(t.waitLabel)}`;
+        else if (t?.status === 'FAILED' || t?.status === 'CANCELLED') {
+          status = `✗ ${esc(t.waitLabel)}`;
+          cls = 'bad';
+        } else if (t?.run && t.status === 'READY') status = '⏳ Waiting for a free worker';
+        return `<article class="promise ${cls}"><header><span class="tag">${j.required ? 'Required' : j.offer ? 'Opportunity' : 'Optional'}</span><span class="due">${j.deadline ? `due ${fmtTime(j.deadline)}` : ''}</span></header>
+          <h3>${j.icon} ${esc(j.title)}</h3><p>${status}</p></article>`;
+      });
+  }
+
   private jobCards(): string[] {
     const s = this.sim?.state;
-    const o = s ? evaluateOpening(s, this.fx.deadlines) : null;
+    const o = s ? evaluateOpening(s, this.fx.deadlines, this.fx) : null;
     const d = this.fx.deadlines ?? {};
     const def: { id: 'launch' | 'feedback' | 'partner'; icon: string; title: string; due: string; plan: string }[] = [
       { id: 'launch', icon: '🚀', title: 'Launch the approved page', due: fmtTime(d.launch!), plan: 'Artwork arrives 18:08 · Maya’s OK needed' },
@@ -435,9 +483,16 @@ export class App {
     setHtml(side, `<div class="side-tabs" role="group" aria-label="Panel">${tabs}</div>${body}`);
   }
 
+  private visibleChoices() {
+    return (this.mission.choices ?? []).filter((c) => !c.showIf || c.showIf(this.picks));
+  }
+
   private guidedSteps(): { id: string; label: string; done: boolean }[] {
     const b = this.build;
     const k = b.workers[0];
+    if (this.mission.choices) {
+      return [...this.visibleChoices().map((c) => ({ id: `c:${c.id}`, label: c.title, done: this.guideDone.has(c.id) })), { id: 'predict', label: 'Predict', done: !!this.predicted }];
+    }
     if (this.mission.shift) {
       const steps = [
         { id: 'watcher', label: 'Watcher', done: !!b.watchers[0] },
@@ -503,7 +558,15 @@ export class App {
       .join('');
     const name = esc(b.agentName);
     let body = '';
-    if (current === 'watcher' && this.mission.shift)
+    if (current.startsWith('c:')) {
+      const c = this.visibleChoices().find((x) => `c:${x.id}` === current)!;
+      body = `<h2 class="prompt">${esc(c.prompt)}</h2>
+        <div class="big-choices">${c.options
+          .map(
+            (o) => `<button class="btn choice ${this.picks[c.id] === o.id ? 'on' : ''}" data-action="g-pick" data-arg="${c.id}:${o.id}"><b>${esc(o.label)}</b><span>${esc(o.desc)}</span>${o.cost ? `<span class="cost">${esc(o.cost)}</span>` : ''}</button>`,
+          )
+          .join('')}</div>`;
+    } else if (current === 'watcher' && this.mission.shift)
       body = `<h2>Tonight’s plan</h2>
         <p>Everyone is leaving. Maya, Leo, Isha and Nora will email ${name} through the evening — a watcher that <b>keeps watching</b> wakes it for each one.</p>
         <button class="btn primary big wide" data-action="place-watcher">📡 Place the inbox watcher</button>`;
@@ -569,14 +632,18 @@ export class App {
         resend_new: 'If no reply: send a brand-new request',
         give_up: 'If no reply: report it failed',
       });
-      const flow = this.mission.shift ? this.shiftFlowHtml() : k!.procedure.map((st) => `<li>${icons[st.kind]} ${plain[st.kind]}</li>`).join('');
+      const flow = this.mission.choices
+        ? this.jobsFlowHtml()
+        : this.mission.shift
+          ? this.shiftFlowHtml()
+          : k!.procedure.map((st) => `<li>${icons[st.kind]} ${plain[st.kind]}</li>`).join('');
       const pr = this.mission.prediction;
       const est = this.estimate();
-      const budgetLine = this.mission.shift
+      const budgetLine = this.mission.shift || this.mission.choices
         ? `<li class="${est.credits <= this.fx.budget ? 'ok' : 'no'}">💳 Budget ${this.fx.budget} credits <span>${est.credits <= this.fx.budget ? '✓' : '✗ over:'} estimate ≈${est.credits}</span></li>`
         : '';
       const goals = budgetLine + this.mission.medals
-        .filter((md) => md.goal && !this.mission.shift)
+        .filter((md) => md.goal && !this.mission.shift && !this.mission.choices)
         .map((md) => {
           const g = md.goal!;
           const ok = g.credits != null ? est.credits <= g.credits : est.checkedAt <= g.by!;
@@ -588,9 +655,9 @@ export class App {
         .map((o) => `<button class="btn choice ${this.predicted === o.id ? 'on' : ''}" data-action="predict" data-arg="${o.id}" aria-pressed="${this.predicted === o.id}">${esc(o.label)}</button>`)
         .join('');
       body = `
-        ${this.mission.shift ? '' : `<p class="muted small">When Isha’s email arrives, ${name} will:</p>`}
+        ${this.mission.shift || this.mission.choices ? '' : `<p class="muted small">When Isha’s email arrives, ${name} will:</p>`}
         ${
-          this.mission.shift
+          this.mission.shift || this.mission.choices
             ? flow
             : `<ol class="flow compact"><li>📡 Notice it (${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>`
         }
@@ -602,13 +669,29 @@ export class App {
         </div>
         <button class="btn primary big wide" data-action="run" ${this.predicted ? '' : 'disabled'}>${this.predicted ? '▶ Run and find out' : 'Make a prediction to run'}</button>
         <div class="row"><button class="btn small ghost" data-action="restart-build">↺ Start the build over</button>${
-          this.mission.shift ? '' : '<button class="btn small ghost" data-action="advanced">Customize…</button>'
+          this.mission.shift || this.mission.choices ? '' : '<button class="btn small ghost" data-action="advanced">Customize…</button>'
         }</div>`;
     }
     return `
+      ${this.mission.choices && current !== 'predict' && current !== 'ready' ? `<p class="small muted setup-note">${name} is already set up from earlier shifts. This mission is about these choices.</p>` : ''}
       <div class="mission-head"><span class="kicker">Mission ${this.mission.n} · ${esc(this.mission.title)}</span>
         <button class="btn small ghost" data-action="map">Missions</button></div>
       <ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
+  }
+
+  private jobsFlowHtml(): string {
+    const jobs = this.fx.jobs ?? [];
+    const title = (id: string) => {
+      const j = jobs.find((x) => x.id === id);
+      return j ? `${j.icon} ${esc(j.title)}${j.internal ? ' <span class="muted">(helper)</span>' : j.offer ? ' <span class="muted">(if offered)</span>' : ''}` : esc(id);
+    };
+    const rows = this.build.workers
+      .map((w, i) => (w && w.responsibilities.length ? `<li><b>${this.build.workers.length > 1 ? `Worker ${i + 1}` : esc(this.build.agentName)}:</b> ${w.responsibilities.map(title).join(' → ')}</li>` : ''))
+      .join('');
+    const picks = this.visibleChoices()
+      .map((c) => `<li class="muted">${esc(c.title)}: ${esc(c.options.find((o) => o.id === this.picks[c.id])?.label ?? '—')}</li>`)
+      .join('');
+    return `<p class="muted small">Your plan (${esc(MACHINES[this.build.machine].name)} machine):</p><ol class="flow compact">${rows}${picks}</ol>`;
   }
 
   private shiftFlowHtml(): string {
@@ -628,6 +711,13 @@ export class App {
   /** Pre-run forecast from declared step costs (no hidden information). */
   private estimate(): { credits: number; checkedAt: number } {
     const rent = MACHINES[this.build.machine].rent;
+    if (this.mission.choices) {
+      // At least: every job's procedure once (re-runs and offers come on top).
+      const credits =
+        rent +
+        this.build.workers.reduce((n, w) => n + (w?.responsibilities ?? []).filter((r) => !(this.fx.jobs ?? []).find((j) => j.id === r)?.offer).reduce((m, r) => m + forecastProcedure(w!.procedures?.[r] ?? [], 1).credits, 0), 0);
+      return { credits, checkedAt: 0 };
+    }
     if (this.mission.shift) {
       const w = this.build.workers.find(Boolean);
       const procs = w?.procedures ?? {};
@@ -856,7 +946,50 @@ export class App {
   // -------------------------------------------------------------------------
   // World panel
 
+  private genericWorldHtml(): string {
+    const s = this.sim!.state;
+    const arts = Object.entries(s.world.artifacts)
+      .filter(([k]) => !k.startsWith('skill') && !k.startsWith('draft_') && k !== 'facts' && k !== 'digest_items')
+      .map(([k, a]) => {
+        const v = Object.entries(a.value ?? {})
+          .filter(([key]) => !['title', 'units', 'kind', 'tileId', 'done'].includes(key))
+          .map(([key, val]) => `${esc(key)}: <b>${esc(String(val))}</b>`)
+          .join(' · ');
+        return `<li><b>${esc(k)}</b> <span class="pill">v${a.version}</span> <span class="muted small">${a.writer ? `${esc(a.writer)} · ${fmtTime(a.at!)}` : ''}</span>${v ? `<div class="small">${v}</div>` : ''}</li>`;
+      })
+      .join('');
+    const sent = s.world.sent.map((x) => `<li><span class="t">${fmtTime(x.at)}</span> ${esc(x.artifact)} → <b>${esc(x.to)}</b>${x.value?.date ? ` · date: <b>${esc(String(x.value.date))}</b>` : ''}${x.value?.refund ? ` · refund ${esc(String(x.value.refund))}` : ''}</li>`).join('');
+    const notes = (this.fx.sources?.notes ?? []).filter((n) => n.at <= s.time);
+    const superseded = new Set(notes.map((n) => n.supersedes).filter(Boolean));
+    const notesHtml = notes.length
+      ? `<section class="card"><h3>🗂️ Notes cabinet</h3><ul class="plain small">${[...notes]
+          .sort((a, b) => b.at - a.at)
+          .map(
+            (n) =>
+              `<li class="${superseded.has(n.id) ? 'superseded' : ''}"><span class="t">${fmtTime(n.at)}</span> “${esc(n.label)}” — ${esc(n.author ?? '?')}${n.authority === 'speculative' ? ' <span class="pill observer">speculative</span>' : n.authority === 'authoritative' ? ' <span class="pill good">decision</span>' : ''}${superseded.has(n.id) ? ' <span class="pill">superseded</span>' : ''}</li>`,
+          )
+          .join('')}</ul></section>`
+      : '';
+    const toMaya = [...s.world.notifications.map((n) => ({ at: n.at, text: `📨 ${n.text}` })), ...s.world.questions.map((q) => ({ at: q.at, text: `❓ question for ${q.who}` }))].sort((a, b) => a.at - b.at);
+    return `
+      <div class="panel-head"><h2>World</h2><span class="muted small">what really happened</span></div>
+      <section class="card"><h3>📁 Files</h3>${arts ? `<ul class="plain small">${arts}</ul>` : '<p class="muted small">Nothing saved yet.</p>'}</section>
+      <section class="card"><h3>📤 Sent</h3>${sent ? `<ul class="plain small">${sent}</ul>` : '<p class="muted small">Nothing sent yet.</p>'}</section>
+      <section class="card"><h3>🔔 Messages to Maya <span class="muted small">${toMaya.length}</span></h3>${toMaya.length ? `<ul class="plain small">${toMaya.map((m) => `<li><span class="t">${fmtTime(m.at)}</span> ${esc(m.text)}</li>`).join('')}</ul>` : '<p class="muted small">None — she hasn’t been interrupted.</p>'}</section>
+      ${notesHtml}
+      <section class="card"><h3>💳 Credits</h3><div class="meterbar"><span style="width:${Math.min(100, (100 * s.credits.spent) / s.credits.budget)}%"></span></div><p class="small">${s.credits.spent} of ${s.credits.budget} spent</p></section>
+      <section class="card"><h3>Inbox</h3><ul class="inbox">${[...s.world.inbox]
+        .sort((a, b) => b.arrivedAt - a.arrivedAt)
+        .slice(0, 12)
+        .map((m) => {
+          const person = PEOPLE[m.from];
+          return `<li class="msg"><span class="avatar" style="--c:${person.color}" aria-hidden="true">${person.name[0]}</span><div><div class="msg-head"><b>${person.name}</b> <span class="muted small">${fmtTime(m.arrivedAt)}</span></div><div class="small"><b>${esc(m.subject)}</b> — ${esc(m.body)}</div></div></li>`;
+        })
+        .join('')}</ul></section>`;
+  }
+
   private worldHtml(): string {
+    if (this.mission.choices) return this.genericWorldHtml();
     const s = this.sim!.state;
     const p = s.world.preview;
     const delivered = new Set(s.watchers.flatMap((w) => w.delivered));
@@ -1087,6 +1220,10 @@ export class App {
     const s = sim.state;
     const name = s.build.agentName;
     const line = (a: NonNullable<(typeof s.workers)[number]['active']>): string => {
+      if (a.step.kind === 'op') {
+        const lbl = a.step.op!.label;
+        return (a.step.op!.type === 'decide' ? `the AI model works on “${lbl}”` : lbl.charAt(0).toLowerCase() + lbl.slice(1)) + (a.cpu && a.rate != null && a.rate < 1 ? ` (sharing the CPU — ${Math.round(a.rate * 100)}% speed)` : '');
+      }
       const purpose = a.step.purpose;
       if (a.step.kind === 'decide' && purpose && purpose !== 'logo') {
         const p: Record<string, string> = {
@@ -1127,17 +1264,18 @@ export class App {
     };
     const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1) + '.';
     const active = s.workers.filter((w) => w.active);
-    const approval = s.tasks.find((t) => t.status === 'WAITING_APPROVAL');
+    const approval = s.tasks.find((t) => t.status === 'WAITING_APPROVAL' || t.status === 'WAITING_PERSON');
     const waitNote = approval ? ` Meanwhile, ${approval.waitLabel.charAt(0).toLowerCase() + approval.waitLabel.slice(1)} — no worker is held.` : '';
     if (active.length > 1) return active.map((w) => `Worker ${w.idx + 1}: ${line(w.active!)}.`).join('  ');
     if (active.length === 1) return cap(line(active[0].active!)) + (s.workers.length > 1 ? ` (Worker ${active[0].idx + 1})` : '') + waitNote;
     if (approval) return `${cap(approval.waitLabel)}. The worker is free — nothing is running.`;
-    if (s.goal === 'shift') {
-      const left = s.tasks.filter((t) => t.status !== 'DONE');
+    if (s.goal === 'shift' || s.goal === 'jobs') {
+      const left = s.tasks.filter((t) => t.status !== 'DONE' && t.status !== 'CANCELLED' && !(this.fx.jobs ?? []).find((j) => j.id === t.responsibility)?.internal);
       if (!left.length) return 'Every job you took on is done.';
       const stuck = left.find((t) => t.status === 'WAITING_BUDGET');
       if (stuck) return `“${stuck.title}” is stuck: not enough credits left for its next step.`;
-      return `Waiting for the evening’s next email (${left.map((t) => t.title.toLowerCase()).join('; ')}).`;
+      const next = sim.nextEventTime();
+      return `Nothing is running. Watchers and timers wait${next ? ` — next thing at ${fmtTime(next)}` : ''} (${left.map((t) => t.title.toLowerCase()).slice(0, 3).join('; ')}).`;
     }
     const armed = s.watchers.some((w) => w.armed);
     const done = s.tasks[0]?.runs.some((r) => r.notes.receipt);
@@ -1209,13 +1347,29 @@ export class App {
     const got = MISSIONS.reduce((n, m) => n + this.progress(m.id).medals.length, 0);
     const learned = new Set(this.save.concepts ?? []);
     const pred = this.save.predictions ?? { right: 0, total: 0 };
+    const SHIFTS: Record<string, string> = {
+      opening: 'Opening · First evenings',
+      '1': 'Shift 1 · Everyone is leaving',
+      '2': 'Shift 2 · Plans changed',
+      '3': 'Shift 3 · The noisy evening',
+      '4': 'Shift 4 · Shared workshop',
+      '5': 'Shift 5 · A procedure worth keeping',
+      '6': 'Shift 6 · The weekend handoff',
+    };
+    const shiftOf = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
+    let lastShift = '';
     const cards = MISSIONS.map((m, i) => {
       const p = this.progress(m.id);
-      // Challenge variants of the evening shift open up as soon as the shift itself is done.
-      const unlocked = i === 0 || this.progress(MISSIONS[i - 1].id).completed || (!!m.challenge && this.progress('m5').completed);
+      // A mission opens when the nearest earlier non-challenge mission is done; challenges never block progress.
+      let prev = i - 1;
+      while (prev > 0 && MISSIONS[prev].challenge) prev--;
+      const unlocked = i === 0 || this.progress(MISSIONS[prev].id).completed || this.progress(MISSIONS[i - 1].id).completed;
+      const sh = shiftOf(m);
+      const heading = sh !== lastShift ? `<h3 class="shift-head">${SHIFTS[sh]}</h3>` : '';
+      lastShift = sh;
       const concept = CONCEPTS.find((c) => c.id === m.concept)!;
       const medals = m.medals.map((md) => `<span class="medal ${p.medals.includes(md.id) ? 'got' : ''}" title="${esc(md.label)}">${md.icon}</span>`).join('');
-      return `<button class="mission-card ${unlocked ? '' : 'locked'} ${p.completed ? 'complete' : ''}" ${unlocked ? `data-action="mission" data-arg="${m.id}"` : 'disabled'}>
+      return `${heading}<button class="mission-card ${unlocked ? '' : 'locked'} ${p.completed ? 'complete' : ''}" ${unlocked ? `data-action="mission" data-arg="${m.id}"` : 'disabled'}>
         <span class="mnum">${unlocked ? m.n : '🔒'}</span>
         <span class="mbody"><b>${esc(m.title)}</b><span class="muted small">${m.challenge ? `⚡ Challenge: ${esc(m.challenge)}` : `${concept.icon} ${esc(concept.title)}`}</span></span>
         <span class="medals" aria-label="${p.medals.length} of 3 medals">${medals}</span>
@@ -1246,13 +1400,29 @@ export class App {
     this.predicted = null;
     this.askMaya = null;
     this.recovery = null;
+    this.picks = {};
     this.shift = { accepted: ['launch'], machine: 'compact', sorting: 'routed' };
     this.history = [];
+    if (this.mission.choices) {
+      const defaults = Object.fromEntries(this.mission.choices.map((c) => [c.id, c.options[0].id]));
+      this.build = this.mission.makeBuild!(this.build, defaults);
+    }
     this.scene.setBuild(this.build);
     this.showBrief();
   }
 
+  /** Rebuild a data-driven mission's build from the picks so far (defaults for the rest). */
+  private applyChoices() {
+    const defaults = Object.fromEntries((this.mission.choices ?? []).map((c) => [c.id, c.options[0].id]));
+    const base = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
+    this.build = this.mission.makeBuild!(base, { ...defaults, ...this.picks });
+    this.scene.setBuild(this.build);
+    this.persist();
+    this.bump();
+  }
+
   private markAllGuided() {
+    for (const c of this.mission.choices ?? []) this.guideDone.add(c.id);
     if (this.mission.askWake) this.guideDone.add('wake');
     if (this.mission.askGuide) this.guideDone.add('guide');
     if (this.mission.askApproval) this.guideDone.add('approval');
@@ -1298,7 +1468,7 @@ export class App {
     const sim = this.sim!;
     this.debriefShown = true;
     this.playing = false;
-    const o = evaluateOpening(sim.state, this.fx.deadlines);
+    const o = evaluateOpening(sim.state, this.fx.deadlines, this.fx);
     const s = sim.state;
     const m = this.mission;
     const before = this.progress(m.id);
@@ -1321,10 +1491,11 @@ export class App {
 
     const name = esc(s.build.agentName);
     let headline: string;
-    if (o.promiseKept) headline = earned.length === 3 ? 'Perfect run! ✨' : s.goal === 'shift' ? 'The launch is live!' : 'Job done!';
+    if (o.promiseKept) headline = earned.length === 3 ? 'Perfect run! ✨' : s.goal === 'shift' ? 'The launch is live!' : s.goal === 'jobs' ? 'The essentials are done.' : 'Job done!';
     else if (s.goal === 'live' && s.world.live.changedBy) headline = `The page went live — but ${name} never confirmed it.`;
     else if (s.goal === 'live') headline = o.blockedProposals ? 'The gate blocked the publish — the live page never changed.' : 'The logo never made it to the live page.';
     else if (s.goal === 'shift') headline = 'The launch didn’t go live.';
+    else if (s.goal === 'jobs') headline = 'Not everything went to plan.';
     else if (o.previewRev && !o.taglineOk) headline = 'The logo is up — but the tagline is missing.';
     else if (o.previewRev) headline = 'The preview shows Isha’s old logo.';
     else headline = 'The preview never got a logo.';
@@ -1350,10 +1521,18 @@ export class App {
       : `<div class="concept-card locked"><p>🔒 Finish the job to unlock the field-guide card <b>${esc(concept.title)}</b>.</p></div>`;
     const next = MISSIONS.find((x) => x.n === m.n + 1);
     const tagline = s.needsTagline ? (s.world.preview.tagline ? esc(s.world.preview.tagline) : '<span class="missing">[tagline missing]</span>') : 'Launching tonight';
-    const liveGoal = s.goal !== 'preview';
+    const liveGoal = s.goal === 'live' || s.goal === 'shift';
     const heroRev = liveGoal ? s.world.live.logoRev : o.previewRev;
+    const jobDefs = this.fx.jobs ?? [];
     const jobsTable =
-      s.goal === 'shift'
+      s.goal === 'jobs'
+        ? `<table class="jobs"><thead><tr><th>Job</th><th>Result</th><th>Due</th></tr></thead><tbody>${o.jobs
+            .map((j) => {
+              const d = jobDefs.find((x) => x.id === j.id)!;
+              return `<tr class="${!j.accepted ? 'declined' : j.ok ? 'ok' : 'no'}"><td>${d.icon} ${esc(d.title)}</td><td>${j.ok ? `done ${fmtTime(j.doneAt!)}` : esc(j.status)}</td><td>${j.deadline ? fmtTime(j.deadline) : ''}</td></tr>`;
+            })
+            .join('')}</tbody></table>`
+        : s.goal === 'shift'
         ? `<table class="jobs"><thead><tr><th>Job</th><th>Result</th><th>Due</th></tr></thead><tbody>${o.jobs
             .map((j) => {
               const names: Record<string, string> = { launch: '🚀 Launch page', feedback: '🗂️ Feedback board', partner: '🤝 Message to Nora' };
@@ -1368,10 +1547,10 @@ export class App {
     this.overlay(`
       <div class="debrief">
         <p class="kicker">Mission ${m.n} · ${esc(m.title)}</p>
-        <div class="hero">
+        ${s.goal === 'jobs' ? '<!--' : ''}<div class="hero">
           <div class="pagebox"><div class="pg-bar">${liveGoal ? 'lumen.app' : 'preview.lumen.app'} <span>v${liveGoal ? s.world.live.version : s.world.preview.version}</span></div>
           <div class="pg-body">${logoSvg(heroRev, 72)}<div><div class="pg-title">Lumen</div><div class="muted small">${liveGoal ? (s.world.live.changedBy ? 'Live now' : 'Coming soon') : tagline}</div></div></div></div>
-        </div>
+        </div>${s.goal === 'jobs' ? '-->' : ''}
         <h2>${headline}</h2>
         ${jobsTable}
         <ul class="medal-results">${medalRow}</ul>
@@ -1406,7 +1585,7 @@ export class App {
 
   /** Explains missed cost/speed medals with the run's own numbers — no guessing. */
   private whyHtml(s: Sim['state'], o: OpeningOutcome, missed: string[]): string {
-    if (s.goal === 'shift') return this.shiftWhyHtml(s, o, missed);
+    if (s.goal === 'shift' || s.goal === 'jobs') return this.shiftWhyHtml(s, o, missed);
     if (!o.promiseKept || !(missed.includes('cheap') || missed.includes('fast'))) return '';
     const friendly = (what: string) => {
       const w = what.replace(/^T\d+: /, '');
@@ -1465,6 +1644,7 @@ export class App {
 
   /** A short description of the build, so runs can be compared. */
   private planSummary(s: Sim['state']): string {
+    if (this.mission.choices) return this.visibleChoices().map((c) => c.options.find((o) => o.id === this.picks[c.id])?.label.replace(/^\S+\s/, '') ?? '').join(' · ');
     if (this.mission.shift) {
       const jobs = s.tasks.length;
       const fb = s.tasks.some((t) => t.responsibility === 'feedback');
@@ -1526,7 +1706,9 @@ export class App {
     const jobOf = (what: string) => {
       const id = /^(T\d+):/.exec(what)?.[1];
       const t = s.tasks.find((x) => x.id === id);
-      return t ? { launch: '🚀 Launch', feedback: '🗂️ Feedback', partner: '🤝 Nora’s message', preview_logo: 'Logo' }[t.responsibility] : '🛠️ Machine rent';
+      const named: Record<string, string> = { launch: '🚀 Launch', feedback: '🗂️ Feedback', partner: '🤝 Nora’s message', preview_logo: 'Logo' };
+      const def = (this.fx.jobs ?? []).find((j) => j.id === t?.responsibility);
+      return t ? (def ? `${def.icon} ${def.title}` : (named[t.responsibility] ?? t.title)) : '🛠️ Machine rent';
     };
     for (const l of s.credits.ledger) byJob.set(jobOf(l.what), (byJob.get(jobOf(l.what)) ?? 0) + l.amount);
     const rows = [...byJob.entries()].map(([k, v]) => `<tr class="${/rent|Feedback/.test(k) && v >= 17 ? 'hot' : ''}"><td>${k}</td><td>${v}</td></tr>`).join('');
@@ -1536,14 +1718,16 @@ export class App {
       .map((t) => {
         const first = s.trace.find((e) => e.taskId === t.id && e.kind === 'step_start');
         const done = t.runs[0]?.notes.receipt?.at;
-        const label = { launch: '🚀 Launch', feedback: '🗂️ Feedback', partner: '🤝 Nora', preview_logo: 'Logo' }[t.responsibility];
+        const def = (this.fx.jobs ?? []).find((j) => j.id === t.responsibility);
+        const label = def ? `${def.icon} ${def.title}` : ({ launch: '🚀 Launch', feedback: '🗂️ Feedback', partner: '🤝 Nora', preview_logo: 'Logo' } as Record<string, string>)[t.responsibility];
         return `<tr><td>${label} (W${t.owner + 1})</td><td>${first ? fmtTime(first.t) : '—'} → ${done ? fmtTime(done) : t.status === 'WAITING_BUDGET' ? 'out of credits' : '—'}</td></tr>`;
       })
       .join('');
     const tips: string[] = [];
     if (stuck) tips.push(`“${esc(stuck.title)}” needed more credits than were left. Routing the clear feedback to the small model saves 8 credits.`);
     if (workers === 1 && missed.includes('wrap')) tips.push('One worker does the jobs in turn, so the last one finishes later. A second worker costs 14 more credits of rent but runs jobs side by side.');
-    if (missed.includes('all') && !stuck && s.tasks.length < 3) tips.push('This medal needs all three jobs — you declined some tonight.');
+    if (missed.includes('all') && !stuck && s.goal === 'shift' && s.tasks.length < 3) tips.push('This medal needs all three jobs — you declined some tonight.');
+    for (const md of this.mission.medals) if (missed.includes(md.id) && s.goal === 'jobs') tips.push(`${md.icon} ${esc(md.hint)}`);
     if (!tips.length) tips.push('Every credit and minute here comes from your choices of jobs, workers and sorting.');
     return `<div class="why">
       <h3>Where your credits and time went</h3>
@@ -1817,6 +2001,13 @@ export class App {
           this.playing = true;
         }
         return this.bump();
+      case 'g-pick': {
+        const [cid, oid] = arg!.split(':');
+        this.picks = { ...this.picks, [cid]: oid };
+        this.guideDone.add(cid);
+        this.predicted = null;
+        return this.applyChoices();
+      }
       case 'g-recovery':
         this.guideDone.add('recovery');
         this.recovery = arg as Recovery;
@@ -1865,6 +2056,10 @@ export class App {
         this.guideDone.clear();
         this.predicted = null;
         this.askMaya = null;
+        if (this.mission.choices) {
+          this.picks = {};
+          return this.applyChoices();
+        }
         this.shift = { accepted: ['launch'], machine: 'compact', sorting: 'routed' };
         this.scene.setBuild(this.build);
         return this.bump();

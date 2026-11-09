@@ -3,7 +3,8 @@
 // (what Relay observed and recorded). The decision engine only ever sees context packets.
 import { packContext, shiftPacket } from './context';
 import { decide, decideWork } from './rules';
-import { STEP_INFO, stepCredits, stepDuration } from './steps';
+import { STEP_INFO, opInfo, stepCredits, stepDuration } from './steps';
+import { getRule, packGeneric } from './genericRules';
 import { MAYA_THANKS } from '../content/opening';
 import {
   MACHINES,
@@ -16,7 +17,9 @@ import {
   type QueuedEvent,
   type Responsibility,
   type SimState,
+  type JobDef,
   type Task,
+  type TileDef,
   type TraceEntry,
   type TriggerKind,
 } from './types';
@@ -82,6 +85,10 @@ export class Sim {
         board: null,
         partnerMessage: null,
         publishRequests: 0,
+        artifacts: {},
+        sent: [],
+        notifications: [],
+        questions: [],
         latestLogoRevSent: 0,
         mayaThanked: false,
       },
@@ -98,6 +105,8 @@ export class Sim {
       violations: [],
       needsTagline: !!fixture.needsTagline,
       goal: fixture.goal ?? 'preview',
+      agentEvents: {},
+      tokenSeq: 0,
       blockedProposals: 0,
       ended: false,
     };
@@ -123,15 +132,16 @@ export class Sim {
       if (!w) return;
       s.workers.push({ idx, active: null });
       for (const r of w.responsibilities) {
-        if (OPTIONAL.includes(r) && !s.build.accepted?.includes(r)) continue;
+        const job = this.job(r);
+        if (job ? job.offer || (!job.required && !s.build.accepted?.includes(r)) : OPTIONAL.includes(r) && !s.build.accepted?.includes(r)) continue;
         const task: Task = {
           id: `T${s.tasks.length + 1}`,
-          title: TASK_TITLES[r],
+          title: job ? job.title : TASK_TITLES[r],
           responsibility: r,
           owner: idx,
           revision: 1,
           status: 'WAITING_EVENT',
-          waitLabel: WAIT_LABELS[triggerFor(r)],
+          waitLabel: job ? 'Waiting for its trigger' : WAIT_LABELS[triggerFor(r)],
           stepIdx: 0,
           run: null,
           pendingLogoRev: null,
@@ -150,8 +160,26 @@ export class Sim {
     });
     this.trace({ kind: 'watcher', actor: 'relay', text: 'Inbox watcher armed; worker idle. No model is running.', cause: start });
 
+    for (const [k, v] of Object.entries(f.artifacts ?? {}))
+      s.world.artifacts[k] = { value: { ...v }, version: 1, writer: 'Maya', at: f.start, history: [{ version: 1, at: f.start, writer: 'Maya', value: { ...v } }] };
+    // Data-driven jobs that start with the shift.
+    for (const t of s.tasks)
+      if (this.job(t.responsibility) && this.triggersOf(t.responsibility).includes('start')) {
+        this.startRun(t, 0, 'start', start);
+        this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+      }
     for (const m of f.messages) if (!m.preexisting) this.enqueue({ t: m.at, phase: PHASE.external, kind: 'message', msgId: m.id });
     this.enqueue({ t: f.end, phase: PHASE.evaluator, kind: 'end' });
+  }
+
+  job(id: string): JobDef | undefined {
+    return this.fixture.jobs?.find((j) => j.id === id);
+  }
+
+  /** Message kinds that wake a responsibility. */
+  triggersOf(r: string): string[] {
+    const j = this.job(r);
+    return j ? (this.state.build.triggers?.[r] ?? j.triggers) : [triggerFor(r)];
   }
 
   // -------------------------------------------------------------------------
@@ -240,13 +268,17 @@ export class Sim {
       case 'dispatch':
         return this.onDispatch();
       case 'step_done':
-        return this.onStepDone(ev.worker!);
+        return this.onStepDone(ev.worker!, ev.token);
       case 'reaction':
         return this.onReaction(ev.cause ?? null);
       case 'approval':
         return this.onApproval(ev.taskId!, ev.cause ?? null);
       case 'commit':
         return this.onCommit(ev.taskId!, ev.cause ?? null);
+      case 'answer':
+        return this.onAnswer(ev.taskId!, ev.ref!, ev.cause ?? null);
+      case 'quiet':
+        return this.onQuiet(ev.taskId!, ev.token!, ev.msgId!, ev.cause ?? null);
       case 'end':
         this.state.ended = true;
         this.trace({ kind: 'shift', actor: 'world', text: `The evening ends at ${fmtTime(this.state.time)}.` });
@@ -267,7 +299,12 @@ export class Sim {
       observerOnly: true,
     });
     const kind = triggerOf(m);
-    if (!kind || !s.tasks.some((t) => triggerFor(t.responsibility) === kind)) {
+    const relevant =
+      !!kind &&
+      (s.tasks.some((t) => this.triggersOf(t.responsibility).includes(kind)) ||
+        (this.fixture.jobs ?? []).some((j) => j.offer && j.triggers.includes(kind)) ||
+        (s.goal === 'jobs' && this.waitsFor(kind)));
+    if (!relevant) {
       if (kind)
         this.trace({ kind: 'watcher', actor: 'world', text: 'No accepted job needs this message, so the watcher ignores it.', cause: id, observerOnly: true });
       return;
@@ -307,11 +344,16 @@ export class Sim {
       this.trace({ kind: 'watcher', actor: 'relay', text: w.closedReason, cause: d });
       this.journal('Watcher closed (Check once rule).');
     }
-    const kind = triggerOf(m);
-    for (const task of s.tasks.filter((t) => triggerFor(t.responsibility) === kind)) {
+    const kind = triggerOf(m)!;
+    s.agentEvents[kind] = s.time;
+    this.wakeEventWaiters(kind);
+    for (const task of s.tasks.filter((t) => this.triggersOf(t.responsibility).includes(kind))) {
       if (task.responsibility === 'preview_logo') this.receiveLogo(task, m.attachment!.logoRev, m.attachment!.id, d);
+      else if (this.job(task.responsibility)) this.receiveGeneric(task, m.id, d);
       else this.receiveWork(task, m.attachment?.logoRev ?? 0, m.attachment?.id ?? m.id, d);
     }
+    for (const j of (this.fixture.jobs ?? []).filter((x) => x.offer && x.triggers.includes(kind) && !s.tasks.some((t) => t.responsibility === x.id)))
+      this.admit(j, m.id, d);
   }
 
   /** One-shot jobs (launch, feedback, partner): start once when their trigger arrives. */
@@ -327,7 +369,7 @@ export class Sim {
     if (!w || !w.armed) return;
     const pending = s.world.inbox.filter((m) => {
       const k = triggerOf(m);
-      return k && s.tasks.some((t) => triggerFor(t.responsibility) === k) && !w.delivered.includes(m.id);
+      return k && s.tasks.some((t) => this.triggersOf(t.responsibility).includes(k)) && !w.delivered.includes(m.id);
     });
     const id = this.trace({
       kind: 'watcher',
@@ -396,11 +438,16 @@ export class Sim {
   private onDispatch() {
     const s = this.state;
     for (const w of s.workers) {
-      if (w.active) continue;
-      const task = s.tasks.find(
-        (t) => t.owner === w.idx && t.run && (t.status === 'READY' || t.status === 'WAITING_RESOURCE' || t.status === 'WAITING_BUDGET'),
-      );
-      if (task) this.startStep(w.idx, task);
+      // A job may stop at a wait without occupying the worker; then try the next ready job.
+      const tried = new Set<string>();
+      while (!w.active) {
+        const task = s.tasks.find(
+          (t) => !tried.has(t.id) && t.owner === w.idx && t.run && (t.status === 'READY' || t.status === 'WAITING_RESOURCE' || t.status === 'WAITING_BUDGET'),
+        );
+        if (!task) break;
+        tried.add(task.id);
+        this.startStep(w.idx, task);
+      }
     }
   }
 
@@ -412,6 +459,35 @@ export class Sim {
     // Skip steps that are no longer needed or finish the run.
     while (task.stepIdx < run.procedure.length) {
       const st = run.procedure[task.stepIdx];
+      if (st.when === 'need' && !run.notes.need) {
+        task.stepIdx++;
+        continue;
+      }
+      if (st.when === 'ok' && run.notes.need) {
+        task.stepIdx++;
+        continue;
+      }
+      if (st.when === 'conflict' && !run.notes.conflict) {
+        task.stepIdx++;
+        continue;
+      }
+      if (st.kind === 'op' && (st.op!.type === 'waitJob' || st.op!.type === 'waitEvent')) {
+        const op = st.op!;
+        const ok = op.type === 'waitJob' ? s.tasks.some((t) => t.responsibility === op.job && t.status === 'DONE') : !!s.agentEvents[op.event];
+        const jobGone = op.type === 'waitJob' && !s.tasks.some((t) => t.responsibility === op.job);
+        if (ok || jobGone) {
+          task.stepIdx++;
+          continue;
+        }
+        task.status = 'WAITING_EVENT';
+        task.waitLabel = op.label;
+        return;
+      }
+      if (st.kind === 'op' && st.op!.type === 'cancel') {
+        this.cancelJob(st.op!.job, task);
+        task.stepIdx++;
+        continue;
+      }
       if (st.kind === 'wait_launch') {
         if (this.launchDone()) {
           this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'The launch page is live and checked — continue.' });
@@ -476,6 +552,21 @@ export class Sim {
       return;
     }
 
+    if (step.kind === 'op' && step.op!.type === 'send' && step.op!.requireApproval) {
+      const op = step.op;
+      const n = run.notes;
+      if (n.approvals?.[op.artifact] == null || n.approvals[op.artifact] !== n.wrote?.[op.artifact]) {
+        s.blockedProposals++;
+        task.status = 'FAILED';
+        task.waitLabel = 'Blocked: no approval for this exact version';
+        this.trace({ kind: 'permission', actor: 'relay', taskId: task.id, worker: wIdx, text: `Permission gate blocks “${op.label}”: no approval for this exact version. Nothing was sent.` });
+        task.runs.push({ ...run, finishedAt: s.time });
+        task.run = null;
+        return;
+      }
+      this.trace({ kind: 'permission', actor: 'relay', taskId: task.id, worker: wIdx, text: `Permission gate allows “${op.label}”: the approved version is the one being sent.` });
+    }
+
     let publishAllowed = false;
     if (step.kind === 'publish_live') {
       const n = run.notes;
@@ -512,14 +603,18 @@ export class Sim {
       task.waitLabel = 'Waiting for budget';
       return;
     }
-    if (s.ram.usedGB + info.ramGB > s.ram.totalGB + 1e-9) {
+    const oi = step.kind === 'op' ? opInfo(step) : null;
+    const ramNeed = oi ? oi.ramGB : info.ramGB;
+    if (s.ram.usedGB + ramNeed > s.ram.totalGB + 1e-9) {
+      if (task.status !== 'WAITING_RESOURCE')
+        this.trace({ kind: 'task', actor: 'relay', taskId: task.id, worker: wIdx, text: `${task.id} waits for RAM: needs ${ramNeed} GB, ${round1(s.ram.totalGB - s.ram.usedGB)} GB free.` });
       task.status = 'WAITING_RESOURCE';
       task.waitLabel = 'Waiting for RAM';
       return;
     }
 
     this.charge(credits, `${task.id}: ${stepLabel(step)}`);
-    s.ram.usedGB = round1(s.ram.usedGB + info.ramGB);
+    s.ram.usedGB = round1(s.ram.usedGB + ramNeed);
     const pub = this.fixture.publication;
     const loseReply = step.kind === 'publish_live' && publishAllowed && !!pub?.loseFirstReply && s.world.publishRequests === 0;
     const dur = step.kind === 'publish_live' && !publishAllowed ? 0.5 * MIN : loseReply ? pub!.timeoutAfter : stepDuration(step, s.cores);
@@ -533,55 +628,101 @@ export class Sim {
     }
     const purpose = step.purpose ?? 'logo';
     const packet =
-      step.kind === 'decide'
-        ? purpose === 'logo'
-          ? packContext(run, this.fixture, step.model ?? 'swift', run.contextRule)
-          : shiftPacket(run, purpose, step.model ?? 'swift')
-        : undefined;
+      step.kind === 'op' && step.op!.type === 'decide'
+        ? packGeneric(this.decisionTiles(run.notes.tiles ?? [], step.op.extra), step.op.select ?? 'all', step.op.goal, step.model ?? 'swift')
+        : step.kind === 'decide'
+          ? purpose === 'logo'
+            ? packContext(run, this.fixture, step.model ?? 'swift', run.contextRule)
+            : shiftPacket(run, purpose, step.model ?? 'swift')
+          : undefined;
     const traceId = this.trace({
       kind: 'step_start',
       actor: 'relay',
       taskId: task.id,
       worker: wIdx,
-      text: `Worker ${wIdx + 1}: ${info.verb}${step.kind === 'decide' ? ` (${stepLabel(step)})` : ''}.`,
-      detail: info.explain,
+      text: oi ? `Worker ${wIdx + 1}: ${step.op!.label}${step.op!.type === 'decide' ? ` (${stepLabel(step).split(' · ').pop()})` : ''}.` : `Worker ${wIdx + 1}: ${info.verb}${step.kind === 'decide' ? ` (${stepLabel(step)})` : ''}.`,
+      detail: oi ? undefined : info.explain,
       packet,
     });
+    const cpuMin = oi ? oi.cpuMinutes : info.cpuMinutes;
+    const wall = oi ? (oi.minutes + (cpuMin ? 0 : oi.ioMinutes)) * MIN : dur;
     worker.active = {
       taskId: task.id,
       stepIdx: task.stepIdx,
       step: clone(step),
       start: s.time,
-      end: s.time + dur,
-      ramGB: info.ramGB,
-      cpu: info.cpuMinutes > 0,
-      remote: info.remote,
+      end: s.time + (cpuMin ? cpuMin * MIN + (oi?.ioMinutes ?? 0) * MIN : wall),
+      ramGB: ramNeed,
+      cpu: cpuMin > 0,
+      remote: oi ? oi.remote : info.remote,
       credits,
       packet,
       traceId,
+      token: ++s.tokenSeq,
+      runN: run.n,
     };
     task.status = 'RUNNING';
     task.waitLabel = '';
+    if (cpuMin > 0) {
+      // Local CPU work shares cores fairly; completion times are rescheduled as load changes.
+      Object.assign(worker.active, { cpuWork: cpuMin * MIN, rate: 0, lastAt: s.time, ioMs: (oi?.ioMinutes ?? 0) * MIN });
+      this.reflowCpu();
+      return;
+    }
+    if (oi) {
+      this.enqueue({ t: s.time + wall, phase: step.op!.type === 'verify' ? PHASE.verify : PHASE.reply, kind: 'step_done', worker: wIdx, token: worker.active.token });
+      return;
+    }
     if (loseReply) this.enqueue({ t: s.time + pub!.commitAfter, phase: PHASE.commit, kind: 'commit', taskId: task.id, cause: traceId });
     this.enqueue({
       t: s.time + dur,
       phase: step.kind.startsWith('verify') ? PHASE.verify : PHASE.reply,
       kind: 'step_done',
       worker: wIdx,
+      token: worker.active.token,
     });
   }
 
-  private onStepDone(wIdx: number) {
+  private onStepDone(wIdx: number, token?: number) {
     const s = this.state;
     const worker = s.workers.find((w) => w.idx === wIdx)!;
     const a = worker.active;
     if (!a) return;
+    if (token != null && a.token !== token) return; // rescheduled by CPU sharing
+    if (a.cpu && a.ioMs) {
+      // CPU part done; the job now waits on I/O, still holding its RAM but no core.
+      a.cpu = false;
+      a.cpuWork = 0;
+      a.token = ++s.tokenSeq;
+      a.end = s.time + a.ioMs;
+      this.enqueue({ t: a.end, phase: PHASE.reply, kind: 'step_done', worker: wIdx, token: a.token });
+      a.ioMs = 0;
+      this.reflowCpu();
+      return;
+    }
     worker.active = null;
     s.ram.usedGB = round1(Math.max(0, s.ram.usedGB - a.ramGB));
+    if (a.cpu) this.reflowCpu();
     const task = s.tasks.find((t) => t.id === a.taskId)!;
+    if (!task.run || task.run.notes.cancelled || (a.runN != null && task.run.n !== a.runN)) {
+      // The job was cancelled while this step ran: its result is discarded.
+      this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: `Discarded “${stepLabel(a.step)}” — that work was cancelled or replaced.` });
+      this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+      return;
+    }
     const run = task.run!;
     const n = run.notes;
     const cause = a.traceId;
+
+    if (a.step.kind === 'op') {
+      const stop = this.finishOp(task, a, wIdx, cause);
+      if (stop) return;
+      task.stepIdx++;
+      if (task.stepIdx >= run.procedure.length) this.finishRun(task);
+      else task.status = 'READY';
+      this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+      return;
+    }
 
     switch (a.step.kind) {
       case 'read_logo': {
@@ -916,8 +1057,22 @@ export class Sim {
     task.run = null;
     if (!run.notes.receipt) {
       task.status = 'FAILED';
-      task.waitLabel = 'Finished without a verification receipt';
+      task.waitLabel = run.notes.need ? `Still unresolved: ${run.notes.need}` : 'Finished without a verification receipt';
+      if (this.job(task.responsibility)) this.wakeJobWaiters(task.responsibility);
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} cannot be marked done: no verification receipt.` });
+      return;
+    }
+    if (this.job(task.responsibility)) {
+      task.status = 'DONE';
+      task.waitLabel = '';
+      this.journal(`${task.id} done: ${task.title}.`);
+      this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} done: ${task.title}.` });
+      this.wakeJobWaiters(task.responsibility);
+      if (task.pendingRef) {
+        const ref = task.pendingRef;
+        task.pendingRef = null;
+        this.startRun(task, 0, ref, null);
+      }
       return;
     }
     if (task.responsibility !== 'preview_logo') {
@@ -951,6 +1106,336 @@ export class Sim {
       task.waitLabel = '';
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} done for revision ${run.logoRev}. No watcher remains armed for it.` });
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Data-driven jobs
+
+  private waitsFor(kind: string): boolean {
+    return this.state.tasks.some((t) => t.run?.procedure.some((p) => p.op?.type === 'waitEvent' && p.op.event === kind));
+  }
+
+  private wakeEventWaiters(kind: string) {
+    for (const t of this.state.tasks) {
+      const st = t.run?.procedure[t.stepIdx];
+      if (t.run && t.status === 'WAITING_EVENT' && st?.op?.type === 'waitEvent' && st.op.event === kind) {
+        t.status = 'READY';
+        t.waitLabel = '';
+        this.enqueue({ t: this.state.time, phase: PHASE.runtime, kind: 'dispatch' });
+      }
+    }
+  }
+
+  private wakeJobWaiters(job: string) {
+    for (const t of this.state.tasks) {
+      const st = t.run?.procedure[t.stepIdx];
+      if (t.run && t.status === 'WAITING_EVENT' && st?.op?.type === 'waitJob' && st.op.job === job) {
+        t.status = 'READY';
+        t.waitLabel = '';
+        this.enqueue({ t: this.state.time, phase: PHASE.runtime, kind: 'dispatch' });
+      }
+    }
+  }
+
+  /** Tiles a decision can draw on: what the run has read, plus declared extras (e.g. installed skills). */
+  private decisionTiles(read: TileDef[], extra?: string[]): TileDef[] {
+    if (!extra?.length) return read;
+    const all = Object.values(this.fixture.sources ?? {}).flat();
+    const add = extra.map((id) => all.find((t) => t.id === id)).filter((t): t is TileDef => !!t);
+    return [...read, ...add.filter((t) => !read.some((r) => r.id === t.id))];
+  }
+
+  /** A new trigger for a data-driven job, handled by the build's policy for that job. */
+  private receiveGeneric(task: Task, ref: string, cause: number) {
+    const s = this.state;
+    const policy = s.build.policies?.[task.responsibility]?.onNew ?? 'once';
+    const busy = !!task.run;
+    if (policy === 'once') {
+      if (busy || task.runs.length) return;
+      this.startRun(task, 0, ref, cause);
+    } else if (policy === 'ignore') {
+      if (busy || task.runs.length) {
+        this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} ignores the update (policy: keep what was prepared).`, cause });
+        return;
+      }
+      this.startRun(task, 0, ref, cause);
+    } else if (policy === 'quiet') {
+      const q = s.build.policies?.[task.responsibility]?.quietMs ?? 2 * MIN;
+      task.quietToken = ++s.tokenSeq;
+      this.enqueue({ t: s.time + q, phase: PHASE.runtime, kind: 'quiet', taskId: task.id, token: task.quietToken, msgId: ref, cause });
+      this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id}: update noted — waiting for ${Math.round(q / MIN)} quiet minute${q === MIN ? '' : 's'} before acting.`, cause });
+      task.status = busy ? task.status : 'WAITING_EVENT';
+      if (!busy) task.waitLabel = 'Waiting for things to settle';
+      return;
+    } else if (policy === 'queue') {
+      if (busy) {
+        task.pendingRef = ref;
+        this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id}: update queued — it will redo the work after the current run.`, cause });
+        return;
+      }
+      this.startRun(task, 0, ref, cause);
+    } else if (policy === 'restart') {
+      if (busy) {
+        task.run!.notes.cancelled = true;
+        task.runs.push({ ...task.run!, finishedAt: s.time });
+        task.run = null;
+        this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id}: update arrived — cancelling the current run and starting over (anything already in flight is wasted).`, cause });
+      }
+      this.startRun(task, 0, ref, cause);
+    }
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
+  private onQuiet(taskId: string, token: number, ref: string, cause: number | null) {
+    const task = this.state.tasks.find((t) => t.id === taskId);
+    if (!task || task.quietToken !== token) return; // a newer update reset the timer
+    if (task.run) {
+      task.pendingRef = ref;
+      return;
+    }
+    this.trace({ kind: 'task', actor: 'relay', taskId, text: `${taskId}: quiet for long enough — acting on the latest update.`, cause });
+    this.startRun(task, 0, ref, cause);
+    this.enqueue({ t: this.state.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
+  private cancelJob(job: string, by: Task) {
+    const t = this.state.tasks.find((x) => x.responsibility === job);
+    if (!t || t.status === 'DONE' || t.status === 'CANCELLED') {
+      this.trace({ kind: 'task', actor: 'relay', taskId: by.id, text: t?.status === 'DONE' ? `Too late to cancel “${t.title}” — it has already happened.` : 'Nothing to cancel.' });
+      return;
+    }
+    if (t.run) {
+      t.run.notes.cancelled = true;
+      t.runs.push({ ...t.run, finishedAt: this.state.time });
+      t.run = null;
+    }
+    t.status = 'CANCELLED';
+    t.waitLabel = `Cancelled by ${by.id}`;
+    this.trace({ kind: 'task', actor: 'relay', taskId: by.id, text: `Cancelled “${t.title}” before it went out.` });
+  }
+
+  /** Mid-shift opportunity: the precommitted admission policy decides — no player needed. */
+  private admit(job: JobDef, ref: string, cause: number) {
+    const s = this.state;
+    const policy = s.build.admission ?? 'decline';
+    const owner = s.build.workers.findIndex((w) => w?.responsibilities.includes(job.id));
+    const proc = s.build.workers[Math.max(0, owner)]?.procedures?.[job.id] ?? [];
+    const cost = proc.reduce((n, st) => n + stepCredits(st), 0);
+    const work = proc.reduce((n, st) => n + stepDuration(st, s.cores), 0);
+    // Conservative estimate from declared costs: reserve what accepted work still needs.
+    const reserved = s.tasks.reduce((n, t) => {
+      const p = t.run?.procedure ?? (t.status === 'WAITING_EVENT' && !t.runs.length ? (s.build.workers[t.owner]?.procedures?.[t.responsibility] ?? []) : []);
+      return n + p.slice(t.run ? t.stepIdx : 0).reduce((m, st) => m + stepCredits(st), 0);
+    }, 0);
+    const free = s.credits.budget - s.credits.spent - reserved;
+    const ownerIdx = Math.max(0, owner);
+    const queued = s.tasks
+      .filter((t) => t.owner === ownerIdx && t.run)
+      .reduce((n, t) => n + t.run!.procedure.slice(t.stepIdx).reduce((m, st) => m + (st.op?.type === 'waitEvent' || st.op?.type === 'waitJob' ? 0 : stepDuration(st, s.cores)), 0), 0);
+    const finish = s.time + queued + work;
+    const fits = cost <= free && (job.deadline == null || finish <= job.deadline);
+    const accept = policy === 'always' || (policy === 'fits' && fits);
+    const why = `cost ${cost} credits vs ${free} free after reserving ${reserved}; estimated finish ${fmtTime(finish)}${job.deadline ? ` vs due ${fmtTime(job.deadline)}` : ''}`;
+    this.trace({
+      kind: 'task',
+      actor: 'relay',
+      text: accept
+        ? `Admission (${policy === 'always' ? 'always accept' : 'accept if it fits'}): accepted “${job.title}” — ${why}.`
+        : `Admission (${policy === 'decline' ? 'decline new work' : 'accept if it fits'}): declined “${job.title}”${policy === 'fits' ? ` — ${why}` : ''}.`,
+      cause,
+    });
+    if (!accept) return;
+    const task: Task = {
+      id: `T${s.tasks.length + 1}`,
+      title: job.title,
+      responsibility: job.id,
+      owner: ownerIdx,
+      revision: 1,
+      status: 'WAITING_EVENT',
+      waitLabel: '',
+      stepIdx: 0,
+      run: null,
+      pendingLogoRev: null,
+      lastCompletedRev: null,
+      runs: [],
+    };
+    s.tasks.push(task);
+    this.startRun(task, 0, ref, cause);
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
+  /** Fair CPU sharing: when the set of running local jobs changes, every job's finish time moves. */
+  private reflowCpu() {
+    const s = this.state;
+    const jobs = s.workers.filter((w) => w.active?.cpu && (w.active.cpuWork ?? 0) > 0);
+    const rate = jobs.length ? Math.min(1, s.cores / jobs.length) : 1;
+    for (const w of jobs) {
+      const a = w.active!;
+      a.cpuWork = Math.max(0, a.cpuWork! - (s.time - a.lastAt!) * a.rate!);
+      a.lastAt = s.time;
+      a.rate = rate;
+      const cpuEnd = s.time + Math.ceil(a.cpuWork / rate);
+      a.end = cpuEnd + (a.ioMs ?? 0);
+      a.token = ++s.tokenSeq;
+      this.enqueue({ t: cpuEnd, phase: PHASE.reply, kind: 'step_done', worker: w.idx, token: a.token });
+    }
+  }
+
+  private nextWindow(who: string): Ms | null {
+    const p = this.fixture.people?.[who];
+    if (!p) return null;
+    const now = this.state.time;
+    for (const [from, to] of p.windows) {
+      if (now >= from && now <= to) return now;
+      if (from > now) return from;
+    }
+    return null;
+  }
+
+  private onAnswer(taskId: string, ref: string, cause: number | null) {
+    const s = this.state;
+    const task = s.tasks.find((t) => t.id === taskId);
+    if (!task?.run) return;
+    const n = task.run.notes;
+    if (ref.startsWith('approve:')) {
+      const artifact = ref.slice(8);
+      const v = n.wrote?.[artifact] ?? 0;
+      (n.approvals ??= {})[artifact] = v;
+      s.world.approvals.push({ version: v, at: s.time, requestedAt: n.approvalRequestedAt ?? s.time });
+      this.trace({ kind: 'reaction', actor: 'world', taskId, text: `Maya approves ${artifact} v${v}: “Looks right — go ahead.”`, cause });
+    } else {
+      const tile = this.fixture.answers?.[ref];
+      if (tile) (n.tiles ??= []).push({ ...tile, at: s.time });
+      this.trace({ kind: 'reaction', actor: 'world', taskId, text: `${tile?.author ?? 'They'} replies: “${tile?.label ?? '…'}”`, cause });
+    }
+    task.status = 'READY';
+    task.waitLabel = '';
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
+  /** Effects of a finished generic operation. Returns true if the run stopped (wait, failure). */
+  private finishOp(task: Task, a: NonNullable<Sim['state']['workers'][number]['active']>, wIdx: number, cause: number): boolean {
+    const s = this.state;
+    const run = task.run!;
+    const n = run.notes;
+    const op = a.step.op!;
+    const tr = (text: string, kind: TraceEntry['kind'] = 'step_done') => this.trace({ kind, actor: 'relay', taskId: task.id, worker: wIdx, text, cause });
+    switch (op.type) {
+      case 'read': {
+        const tiles = (this.fixture.sources?.[op.source] ?? []).filter((t) => t.at <= s.time);
+        const have = (n.tiles ??= []);
+        for (const t of tiles) if (!have.some((h) => h.id === t.id)) have.push(t);
+        tr(`${op.label}: ${tiles.length} item${tiles.length === 1 ? '' : 's'} read.`);
+        break;
+      }
+      case 'readArtifact': {
+        const art = s.world.artifacts[op.artifact];
+        (n.readVersions ??= {})[op.artifact] = art?.version ?? 0;
+        (n.readValues ??= {})[op.artifact] = { ...(art?.value ?? {}) };
+        if (art?.value) {
+          // What was read can go on a tray: a document, or a saved skill.
+          const v = art.value;
+          const tile: TileDef = {
+            id: String(v.tileId ?? `art:${op.artifact}`),
+            label: String(v.title ?? `${op.artifact} v${art.version}`),
+            units: Number(v.units ?? 2),
+            source: op.artifact,
+            at: s.time,
+            kind: v.kind === 'skill' ? 'skill' : 'doc',
+            data: { ...v },
+          };
+          const tiles = (n.tiles ??= []);
+          const i = tiles.findIndex((t) => t.id === tile.id);
+          if (i >= 0) tiles[i] = tile;
+          else tiles.push(tile);
+        }
+        tr(`${op.label}: version ${art?.version ?? 0}.`);
+        break;
+      }
+      case 'decide': {
+        const r = getRule(op.rule)(a.packet!, a.packet!.tiles.filter((t) => t.included));
+        n.need = r.need;
+        if (r.output) n.output = { ...(n.output ?? {}), ...r.output };
+        this.trace({
+          kind: 'decision',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: r.need ? `Decision: can’t settle it from the tray — needs ${r.need}.` : `Decision: ${r.explanation}`,
+          detail: `Simulation explanation — rule “${op.rule}”: ${r.explanation}`,
+          packet: a.packet,
+          cause,
+        });
+        break;
+      }
+      case 'local':
+        tr(`${op.label}: done.`);
+        break;
+      case 'write': {
+        const art = (s.world.artifacts[op.artifact] ??= { value: null, version: 0, writer: null, at: null, history: [] });
+        const expected = n.readVersions?.[op.artifact];
+        if (op.expectVersion && expected != null && art.version !== expected) {
+          n.conflict = true;
+          tr(`Write rejected: ${op.artifact} is at version ${art.version}, this work was based on version ${expected}. Nothing was overwritten.`, 'write');
+          break;
+        }
+        // A write builds on the version this run read (or the current one if it never read it).
+        const value = { ...(n.readValues?.[op.artifact] ?? art.value ?? {}), ...(n.output ?? {}) };
+        art.version++;
+        art.value = value;
+        art.writer = `Worker ${wIdx + 1}`;
+        art.at = s.time;
+        art.history.push({ version: art.version, at: s.time, writer: art.writer, value });
+        (n.wrote ??= {})[op.artifact] = art.version;
+        n.conflict = false;
+        tr(`${op.label}: ${op.artifact} saved as version ${art.version}.`, 'write');
+        break;
+      }
+      case 'send': {
+        const art = s.world.artifacts[op.artifact];
+        const value = art?.value ?? n.output ?? null;
+        s.world.sent.push({ artifact: op.artifact, to: op.to, at: s.time, value: value ? { ...value } : null });
+        tr(`${op.label}: sent to ${op.to}.`, 'write');
+        break;
+      }
+      case 'verify': {
+        const art = s.world.artifacts[op.artifact];
+        const sent = s.world.sent.some((x) => x.artifact === op.artifact && x.at >= run.startedAt);
+        if ((art && n.wrote?.[op.artifact] === art.version) || sent) {
+          n.receipt = { version: art?.version ?? 1, logoRev: 0, at: s.time };
+          tr(`${op.label}: confirmed. Receipt stored.`, 'verify');
+        } else tr(`${op.label}: the result isn’t there (or someone changed it since).`, 'verify');
+        break;
+      }
+      case 'notify':
+        s.world.notifications.push({ who: op.who, at: s.time, text: op.text });
+        n.receipt = { version: 1, logoRev: 0, at: s.time }; // delivery confirmed
+        tr(`${op.label}.`);
+        break;
+      case 'ask':
+      case 'approve': {
+        const when = this.nextWindow(op.who);
+        const p = this.fixture.people?.[op.who];
+        s.world.questions.push({ who: op.who, at: s.time });
+        if (op.type === 'approve') n.approvalRequestedAt = s.time;
+        task.stepIdx++;
+        task.status = 'WAITING_PERSON';
+        if (when == null || !p) {
+          task.waitLabel = `Waiting for ${op.who} — not reachable again before the deadline`;
+          tr(`${op.label}: ${op.who} isn’t reachable again. The question waits.`);
+        } else {
+          const at = when + p.replyAfter;
+          task.waitLabel = `Waiting for ${op.who}’s ${op.type === 'approve' ? 'OK' : 'answer'}${when > s.time ? ` (back ${fmtTime(when)})` : ''}`;
+          tr(`${op.label}${when > s.time ? ` — ${op.who} is away until ${fmtTime(when)}; the question waits durably` : ''}. The worker is free meanwhile.`);
+          this.enqueue({ t: at, phase: PHASE.reply, kind: 'answer', taskId: task.id, ref: op.type === 'approve' ? `approve:${op.artifact}` : op.answer, cause });
+        }
+        this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+        return true;
+      }
+      default:
+        break;
+    }
+    return false;
   }
 
   feedbackLoad(): { complete: number; incomplete: number } {
