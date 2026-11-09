@@ -1,6 +1,6 @@
 // Construction compiler (spec §16 module 3): validates a player build and explains problems
 // before Run. It never executes arbitrary code — only the bounded step vocabulary.
-import type { Build, StepDef } from './types';
+import type { Build, Fixture, StepDef } from './types';
 import { MACHINES } from './types';
 import { stepCredits, stepDuration } from './steps';
 
@@ -11,9 +11,9 @@ export interface Issue {
   message: string;
 }
 
-export const MAX_STEPS = 7;
+export const MAX_STEPS = 8;
 
-export function validateProcedure(proc: StepDef[]): Issue[] {
+export function validateProcedure(proc: StepDef[], goal: Fixture['goal'] = 'preview'): Issue[] {
   const issues: Issue[] = [];
   const err = (message: string) => issues.push({ level: 'error', where: 'procedure', message });
   const idx = (k: StepDef['kind']) => proc.findIndex((s) => s.kind === k);
@@ -40,7 +40,13 @@ export function validateProcedure(proc: StepDef[]): Issue[] {
   if (write < 0) err('Add “Save to preview”, or nothing will change on the page.');
   else if (render >= 0 && write < render) err('“Save to preview” must come after “Render artwork”.');
 
-  if (verify < 0)
+  if (goal === 'live') {
+    const pub = idx('publish_live');
+    const vl = idx('verify_live');
+    if (pub < 0) err('Add “Publish to live page” — the job is the live page.');
+    if (vl < 0) err('Add “Check the live page”. Relay can’t call it done without evidence.');
+    else if (pub >= 0 && vl < pub) err('“Check the live page” must come after publishing.');
+  } else if (verify < 0)
     err('Add “Verify preview”. Relay cannot call the task done without evidence that the page actually changed.');
   else if (write >= 0 && verify < write) err('“Verify preview” must come after “Save to preview”.');
 
@@ -59,7 +65,14 @@ export function validateProcedure(proc: StepDef[]): Issue[] {
       message: '“Read current preview” after Decide means the model never sees it. It will still cost time.',
     });
 
-  if (proc.some((s) => s.kind === 'publish_live'))
+  const ra = idx('request_approval');
+  if (goal === 'live' && idx('publish_live') >= 0 && (ra < 0 || ra > idx('publish_live')))
+    issues.push({
+      level: 'warn',
+      where: 'procedure',
+      message: 'Maya asked to approve first. Without “Ask Maya to approve” before publishing, the permission gate will block it.',
+    });
+  if (goal !== 'live' && proc.some((s) => s.kind === 'publish_live'))
     issues.push({
       level: 'warn',
       where: 'procedure',
@@ -69,8 +82,18 @@ export function validateProcedure(proc: StepDef[]): Issue[] {
   return issues;
 }
 
-export function validateBuild(build: Build): Issue[] {
+export function validateBuild(build: Build, fixture?: Fixture): Issue[] {
   const issues: Issue[] = [];
+  const goal = fixture?.goal ?? 'preview';
+  if (goal === 'shift') {
+    // Shift procedures come from content; check the machine and watcher only.
+    const m = MACHINES[build.machine];
+    if (!build.watchers[0]) issues.push({ level: 'error', where: 'watcher', slot: 0, message: 'Place a watcher so Relay notices the evening’s emails.' });
+    if (build.workers.filter(Boolean).length > m.workerSlots)
+      issues.push({ level: 'error', where: 'machine', message: `The ${m.name} machine has ${m.workerSlots} worker slot(s).` });
+    if (!build.workers.some(Boolean)) issues.push({ level: 'error', where: 'worker', message: 'Choose a machine.' });
+    return issues;
+  }
   const machine = MACHINES[build.machine];
   const watcher = build.watchers[0];
   const workers = build.workers;
@@ -96,13 +119,13 @@ export function validateBuild(build: Build): Issue[] {
 
   workers.forEach((w, i) => {
     if (!w) return;
-    for (const iss of validateProcedure(w.procedure)) issues.push({ ...iss, slot: i });
+    for (const iss of validateProcedure(w.procedure, goal)) issues.push({ ...iss, slot: i });
   });
   return issues;
 }
 
-export function isRunnable(build: Build): boolean {
-  return validateBuild(build).every((i) => i.level !== 'error');
+export function isRunnable(build: Build, fixture?: Fixture): boolean {
+  return validateBuild(build, fixture).every((i) => i.level !== 'error');
 }
 
 /** Forecast for one logo revision through a procedure (no contention). */
@@ -111,7 +134,7 @@ export function forecastProcedure(proc: StepDef[], cores: number): { minutes: nu
   let credits = 0;
   for (const s of proc) {
     ms += stepDuration(s, cores);
-    if (s.kind !== 'publish_live') credits += stepCredits(s); // blocked proposals are never charged
+    credits += stepCredits(s); // a publish without approval is blocked and not charged; estimate assumes it goes out
   }
   return { minutes: ms / 60000, credits };
 }

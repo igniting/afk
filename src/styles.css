@@ -377,3 +377,18 @@ summary { cursor: pointer; min-height: 32px; }
 .estimate li.no span { color: var(--bad); }
 .medal-results .mtext .pill { justify-self: start; }
 .why td:last-child { white-space: nowrap; padding-left: 8px; }
+
+.locked-choice { cursor: default; opacity: .85; }
+.jobs { width: 100%; border-collapse: collapse; font-size: 14px; margin: 8px 0; text-align: left; }
+.jobs th, .jobs td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.jobs th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.jobs tr.ok td:nth-child(2) { color: var(--good); }
+.jobs tr.no td:nth-child(2) { color: var(--bad); }
+.jobs tr.declined td { color: var(--muted); }
+code { font-size: 13px; background: #0e182c; padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 900px) { .meter { white-space: normal; } .meters { min-width: 0; } }
+.board-hint { border-radius: 14px; }
+@media (max-width: 900px) { .board-hint { font-size: 14px; bottom: 8px; padding: 6px 12px; } }
+.app[data-advanced='false'] .rail-pager.multi { display: flex !important; }
+@media (min-width: 901px) { .app[data-advanced='false'] .rail-pager.multi { display: none !important; } }
+@media (max-width: 900px) { .board-hint { width: calc(100% - 24px); } }

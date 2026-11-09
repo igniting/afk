@@ -54,9 +54,21 @@ The same engine powers interactive play and the headless tests.
   unlock in order. **Customize…** reveals the full controls (step editor, models, context rules,
   CPU/RAM, journal, timeline, inspector, rewind, live edits). `tests/missions.test.ts` proves which
   builds earn which medals.
-- **Phase 2 — One satisfying shift (Gate B)**: *“Everyone is leaving”* with optional commitments,
-  two workers on the Team machine, approvals, CPU/RAM contention, credits, the social-image
-  opportunity, Away mode, run comparison, and the three alternate fixtures.
+- **Phase 2 — Permissions and the evening shift** ✅ Two more missions on the same engine:
+  4. *Hands off* — permissions & approvals: the gate only lets out a version Maya approved;
+     asking costs waiting time, publishing straight away is blocked (not a violation).
+  5. *The evening shift* — a simplified “Everyone is leaving” (spec §9): launch (required, with
+     approval), feedback board and partner message (optional), one worker or two, feedback
+     sorted by one big model or routed by difficulty, and a hard 50-credit budget. Workers switch
+     jobs while one waits for a person; the partner message waits for the launch receipt.
+
+  Engine additions: approvals bound to a draft version, dependency waits, multi-job workers,
+  the Team machine, and an evaluator for live-page and shift goals. `tests/phase2.test.ts`
+  proves e.g. Team + routed earns every medal at 44 credits, Team + big-model sorting runs out
+  of credits, and one worker finishes everything cheaply but later.
+- **Next — remaining spec work**: the social-image opportunity, Away mode and admission policies,
+  alternate conditions (Quiet evening, Early departure, Uncertain publication with reconciliation),
+  side-by-side run comparison.
 - **Phase 3 — Layer expansion (Gate C)**: shifts 2–5 (memory, event coalescing, filesystem
   versions, skills).
 - **Phase 4 — Weekend handoff & release (Gate D)**: capstone, Failure Labs, accessibility polish,

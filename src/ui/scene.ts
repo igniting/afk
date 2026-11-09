@@ -3,9 +3,9 @@
 import * as THREE from 'three';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { Sim } from '../sim/engine';
-import { MODELS, fmtTime, type Build, type TraceEntry } from '../sim/types';
-import { STEP_INFO } from '../sim/steps';
+import { fmtTime, type Build, type TraceEntry } from '../sim/types';
 import { LOGO_COLORS, drawPage } from './logo';
+import { BenchView } from './bench';
 
 export type Target =
   | { kind: 'watcher'; idx: number }
@@ -80,21 +80,8 @@ export class BoardScene {
   private watcherSlot = new THREE.Group();
   private hook = new THREE.Group();
   private hookLabel!: CSS2DObject;
-  private bench = new THREE.Group();
+  private benches: BenchView[] = [];
   private benchSlot = new THREE.Group();
-  private benchLabel!: CSS2DObject;
-  private modelLamp!: THREE.Mesh;
-  private modelLabel!: CSS2DObject;
-  private cpuFill!: THREE.Mesh;
-  private ramFill!: THREE.Mesh;
-  private cpuLabel!: CSS2DObject;
-  private taskCard = new THREE.Group();
-  private taskLabel!: CSS2DObject;
-  private progress!: THREE.Mesh;
-  private tray = new THREE.Group();
-  private trayTiles = new THREE.Group();
-  private trayLabel!: CSS2DObject;
-  private trayKey = '';
   private journalLabel!: CSS2DObject;
   private shelfCards = new THREE.Group();
   private shelfKey = '';
@@ -105,6 +92,10 @@ export class BoardScene {
   private previewKey = '';
   private previewLabel!: CSS2DObject;
   private liveLock!: THREE.Mesh;
+  private liveCanvas = document.createElement('canvas');
+  private liveTex!: THREE.CanvasTexture;
+  private liveKey = '';
+  private liveLabel!: CSS2DObject;
   private liveFlash = 0;
   private receipt!: THREE.Mesh;
   private receiptGlow = 0;
@@ -261,82 +252,36 @@ export class BoardScene {
   }
 
   private buildBench() {
-    const p = POS.bench;
-    const g = this.bench;
-    const top = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.16, 2.0), mat('#475569'));
-    top.position.y = 0.92;
-    top.castShadow = top.receiveShadow = true;
-    g.add(top);
-    for (const [x, z] of [[-1.65, -0.85], [1.65, -0.85], [-1.65, 0.85], [1.65, 0.85]]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), mat('#334155'));
-      leg.position.set(x, 0.42, z);
-      leg.castShadow = true;
-      g.add(leg);
+    for (const i of [0, 1]) {
+      const b = new BenchView(i);
+      tag(b.group, { kind: 'worker', idx: i });
+      tag(b.tray, { kind: 'context', idx: i });
+      b.group.visible = i === 0;
+      this.benches.push(b);
+      this.pickables.push(b.group);
+      this.scene.add(b.group);
     }
-    // Model module: a replaceable decision box with a lamp lit only during remote inference.
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.7), mat('#1e1b4b'));
-    box.position.set(-1.15, 1.28, -0.45);
-    box.castShadow = true;
-    this.modelLamp = new THREE.Mesh(new THREE.SphereGeometry(0.17, 20, 20), mat('#312e81', { emissive: '#000000' }));
-    this.modelLamp.position.set(-1.15, 1.7, -0.45);
-    g.add(box, this.modelLamp);
-    this.modelLabel = label('Model', 'lbl small');
-    this.modelLabel.position.set(-1.15, 2.05, -0.45);
-    g.add(this.modelLabel);
+    this.layoutBenches(1);
+    this.slot('worker', POS.bench, this.benchSlot, '🛠️ Place worker');
+  }
 
-    // CPU & RAM meters
-    const meter = (x: number, color: string) => {
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(0.28, 1.4, 0.28),
-        new THREE.MeshStandardMaterial({ color: '#94a3b8', transparent: true, opacity: 0.18 }),
-      );
-      frame.position.set(x, 1.7, -0.7);
-      const fill = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.36, 0.24), mat(color, { emissive: color, emissiveIntensity: 0.35 }));
-      fill.position.set(x, 1.02, -0.7);
-      fill.scale.y = 0.001;
-      g.add(frame, fill);
-      return fill;
-    };
-    this.cpuFill = meter(1.15, '#f59e0b');
-    this.ramFill = meter(1.55, '#60a5fa');
-    // One combined label avoids overlap: "CPU idle · RAM 0/2 GB".
-    this.cpuLabel = label('CPU', 'lbl small detail');
-    this.cpuLabel.position.set(1.35, 2.7, -0.7);
-    g.add(this.cpuLabel);
+  /** One worker sits centre stage; two share the workbench pad side by side. */
+  private layoutBenches(count: number) {
+    this.benches.forEach((b, i) => {
+      b.group.visible = i < count;
+      if (count > 1) {
+        b.group.position.set(POS.bench.x + (i === 0 ? -1.25 : 1.25), 0, POS.bench.z);
+        b.group.scale.setScalar(0.64);
+      } else {
+        b.group.position.copy(POS.bench);
+        b.group.scale.setScalar(1);
+      }
+    });
+  }
 
-    // Task card with progress bar
-    const card = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.7), mat('#e2e8f0'));
-    this.taskCard.add(card);
-    this.progress = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.06, 0.08), mat('#5eead4', { emissive: '#5eead4', emissiveIntensity: 0.6 }));
-    this.progress.position.set(0, 0.03, 0.27);
-    this.taskCard.add(this.progress);
-    this.taskCard.position.set(0.05, 1.6, -0.2);
-    this.taskCard.rotation.x = 0.5;
-    this.taskLabel = label('', 'lbl task');
-    this.taskLabel.position.set(0, 0.55, 0);
-    this.taskCard.add(this.taskLabel);
-    this.taskCard.visible = false;
-    g.add(this.taskCard);
-
-    // Context tray
-    const tray = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.06, 0.62), mat('#0f172a'));
-    this.tray.add(tray, this.trayTiles);
-    this.tray.position.set(-0.45, 1.03, 0.55);
-    this.trayLabel = label('Context tray', 'lbl small detail');
-    this.trayLabel.position.set(0, 0, 0.62);
-    this.tray.add(this.trayLabel);
-    tag(this.tray, { kind: 'context', idx: 0 });
-    g.add(this.tray);
-
-    this.benchLabel = label('Worker 1', 'lbl obj');
-    this.benchLabel.position.set(0, 0.0, 1.45);
-    g.add(this.benchLabel);
-    g.position.copy(p);
-    tag(g, { kind: 'worker', idx: 0 });
-    tag(this.tray, { kind: 'context', idx: 0 });
-    this.pickables.push(g);
-    this.scene.add(g);
-    this.slot('worker', p, this.benchSlot, '🛠️ Place worker');
+  private benchPos(i: number | undefined): THREE.Vector3 {
+    const b = this.benches[i ?? 0];
+    return b && b.group.visible ? b.group.position : POS.bench;
   }
 
   private buildRecords() {
@@ -417,13 +362,13 @@ export class BoardScene {
     this.previewLabel = monitor(POS.preview, this.previewTex, 'Preview page · Relay may edit', { kind: 'preview' }).l;
     this.drawPreview(null, 1);
 
-    const liveCanvas = document.createElement('canvas');
-    liveCanvas.width = 512;
-    liveCanvas.height = 320;
-    drawPage(liveCanvas.getContext('2d')!, 512, 320, { title: 'lumen.app', logoRev: null, locked: true, version: 1 });
-    const liveTex = new THREE.CanvasTexture(liveCanvas);
-    liveTex.colorSpace = THREE.SRGBColorSpace;
-    const live = monitor(POS.live, liveTex, 'Live page · protected', { kind: 'live' });
+    this.liveCanvas.width = 512;
+    this.liveCanvas.height = 320;
+    this.liveTex = new THREE.CanvasTexture(this.liveCanvas);
+    this.liveTex.colorSpace = THREE.SRGBColorSpace;
+    this.drawLive(null, 1);
+    const live = monitor(POS.live, this.liveTex, 'Live page · protected', { kind: 'live' });
+    this.liveLabel = live.l;
     this.liveLock = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.06, 8, 20, Math.PI), mat('#94a3b8', { metalness: 0.6, emissive: '#000' }));
     this.liveLock.position.set(1.1, 2.62, 0.1);
     const lockBody = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.36, 0.14), mat('#94a3b8', { metalness: 0.6 }));
@@ -441,6 +386,11 @@ export class BoardScene {
       new THREE.MeshBasicMaterial({ color: '#4ade80', transparent: true, opacity: 0 }),
     );
     this.scene.add(this.receipt);
+  }
+
+  private drawLive(rev: number | null, version: number) {
+    drawPage(this.liveCanvas.getContext('2d')!, 512, 320, { title: 'lumen.app', logoRev: rev, locked: rev == null, version });
+    this.liveTex.needsUpdate = true;
   }
 
   private drawPreview(rev: number | null, version: number, tagline: string | null = null, needsTagline = false) {
@@ -516,21 +466,23 @@ export class BoardScene {
     const k = build.workers[0];
     this.watcher.visible = !!w;
     this.watcherSlot.visible = !w && !this.sim;
-    this.bench.visible = !!k;
+    const count = build.workers.filter(Boolean).length;
+    this.layoutBenches(Math.max(count, 1));
+    this.benches[0].group.visible = !!k;
     // Guided build: reveal the worker slot only once the watcher is placed.
-    this.benchSlot.visible = !k && !this.sim && (this.detail || !!w);
+    this.benchSlot.visible = !k && !this.sim && !build.accepted && (this.detail || !!w);
     for (const l of this.slotLabels) l.element.style.display = l.parent?.visible ? '' : 'none';
     if (w) this.watcherLabel.element.textContent = `Watcher · ${w.wake === 'keep' ? 'keeps watching' : w.wake === 'once' ? 'checks once' : 'wake rule?'}`;
-    if (k) {
-      const d = k.procedure.find((s) => s.kind === 'decide');
-      this.modelLabel.element.textContent = this.detail ? (d?.model ? `Model: ${MODELS[d.model].name}` : 'Model: —') : 'AI model';
-      this.benchLabel.element.textContent = `${build.agentName} · worker`;
-    }
+    build.workers.forEach((wk, i) => {
+      if (!wk) return;
+      const jobs = wk.responsibilities.filter((r) => r === 'preview_logo' || r === 'launch' || build.accepted?.includes(r));
+      const names: Record<string, string> = { preview_logo: 'logo', launch: 'launch', feedback: 'feedback', partner: 'Nora' };
+      this.benches[i].setName(count > 1 || jobs.length > 1 ? `W${i + 1}: ${jobs.map((j) => names[j]).join(' + ')}` : `${build.agentName} · worker`);
+    });
     if (!this.sim) {
-      this.taskCard.visible = false;
+      this.benches.forEach((b) => b.reset());
       this.hook.visible = !!w && !!k;
-      this.hookLabel.element.textContent = 'The job waits here for Isha’s email';
-      this.setTrayTiles([]);
+      this.hookLabel.element.textContent = 'Jobs wait here for their emails';
     }
   }
 
@@ -539,14 +491,16 @@ export class BoardScene {
     this.lastTrace = sim ? sim.state.trace.length : 0;
     this.flyers.forEach((f) => this.scene.remove(f.mesh));
     this.flyers = [];
-    this.shelfKey = this.trayKey = this.previewKey = '';
+    this.shelfKey = this.previewKey = this.liveKey = '';
     this.receiptGlow = 0;
     if (!sim) {
       this.drawPreview(null, 1);
+      this.drawLive(null, 1);
+      this.liveLabel.element.textContent = 'Live page · protected';
       this.previewLabel.element.textContent = 'Preview page · Relay may edit';
       this.inboxLabel.element.textContent = 'Inbox';
       this.shelfCards.clear();
-      this.setTrayTiles([]);
+      this.benches.forEach((b) => b.reset());
     }
     if (this.build) this.setBuild(sim ? sim.state.build : this.build);
   }
@@ -561,7 +515,7 @@ export class BoardScene {
         return POS.watcher;
       case 'worker':
       case 'context':
-        return POS.bench;
+        return this.benchPos(t.idx);
       case 'journal':
         return POS.journal;
       case 'shelf':
@@ -573,31 +527,6 @@ export class BoardScene {
       case 'live':
         return POS.live;
     }
-  }
-
-  private setTrayTiles(tiles: { units: number; included: boolean; category: string }[]) {
-    const key = JSON.stringify(tiles);
-    if (key === this.trayKey) return;
-    this.trayKey = key;
-    this.trayTiles.clear();
-    let x = -0.88;
-    let ex = 1.15;
-    const colors: Record<string, string> = { header: '#64748b', pinned: '#fbbf24', retrieved: '#38bdf8', raw: '#a78bfa', file: '#f472b6' };
-    for (const t of tiles) {
-      const w = t.units * 0.085;
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w - 0.02, 0.08, 0.42), mat(colors[t.category] ?? '#999', { transparent: !t.included, opacity: t.included ? 1 : 0.55 }));
-      if (t.included) {
-        m.position.set(x + w / 2, 0.07, 0);
-        x += w;
-      } else {
-        m.position.set(ex + w / 2, 0.0, 0.05);
-        m.rotation.y = 0.25;
-        ex += w + 0.05;
-      }
-      m.castShadow = true;
-      this.trayTiles.add(m);
-    }
-    tag(this.tray, { kind: 'context', idx: 0 });
   }
 
   /** Called every animation frame. */
@@ -615,12 +544,8 @@ export class BoardScene {
     if (sim) this.projectSim(sim, pulse);
     else {
       (this.watcherLamp.material as THREE.MeshStandardMaterial).emissive.copy(this.accent).multiplyScalar(0.4);
-      (this.modelLamp.material as THREE.MeshStandardMaterial).emissive.set('#000');
-      this.cpuFill.scale.y = this.ramFill.scale.y = 0.001;
-      this.cpuLabel.element.textContent = 'CPU idle · RAM 0/2 GB';
       this.journalLabel.element.textContent = 'Journal (durable)';
       this.inboxLabel.element.textContent = 'Inbox';
-      this.trayLabel.element.textContent = 'Context tray';
     }
 
     // Flyers
@@ -669,67 +594,52 @@ export class BoardScene {
       }
     }
 
-    const task = s.tasks[0];
-    const worker = s.workers[0];
-    const active = worker?.active;
-
-    // Waiting hook
-    const waiting = task && task.status === 'WAITING_EVENT';
-    this.hook.visible = !!waiting;
-    if (waiting) {
-      const avail = this.fixtureAvailability(sim);
-      this.hookLabel.element.textContent = this.detail ? `${task.id} waiting: logo from Isha · ${avail}` : 'Waiting for Isha’s email';
+    // Waiting hook: jobs parked on a person or an event, with no worker held.
+    const waiting = s.tasks.filter((t) => t.status === 'WAITING_EVENT' || t.status === 'WAITING_APPROVAL' || t.status === 'WAITING_BUDGET');
+    this.hook.visible = waiting.length > 0;
+    if (waiting.length) {
+      const short = (t: (typeof waiting)[number]) =>
+        t.status === 'WAITING_APPROVAL' ? 'Maya’s OK' : t.status === 'WAITING_BUDGET' ? 'credits (budget spent)' : t.waitLabel.replace(/^Keeping current: waiting for /, '').replace(/^Waiting for /, '');
+      const multi = s.tasks.length > 1;
+      this.hookLabel.element.textContent = this.detail
+        ? waiting.map((t) => `${t.id} waits: ${short(t)}`).join(' · ') + ` · ${this.fixtureAvailability(sim)}`
+        : multi
+          ? `Waiting: ${waiting.map(short).join(' · ')}`
+          : `Waiting for ${short(waiting[0])}`;
       if (!this.reduceMotion) this.hook.rotation.z = Math.sin(this.now / 700) * 0.04;
     }
 
-    // Model lamp: on only during remote inference; CPU can stay idle meanwhile.
-    const lamp = this.modelLamp.material as THREE.MeshStandardMaterial;
-    if (active?.remote) {
-      lamp.emissive.set('#a78bfa').multiplyScalar(0.5 + 0.8 * pulse);
-      this.modelLabel.element.textContent = this.detail ? `Model: ${MODELS[active.step.model ?? 'swift'].name} · thinking (remote)` : 'AI thinking…';
-    } else {
-      lamp.emissive.set('#000');
-      const d = s.build.workers[0]?.procedure.find((x) => x.kind === 'decide');
-      this.modelLabel.element.textContent = this.detail ? (d?.model ? `Model: ${MODELS[d.model].name}` : 'Model') : 'AI model';
-    }
-    const cpu = active?.cpu ? 1 : 0;
-    this.cpuFill.scale.y = Math.max(0.001, cpu);
-    this.cpuFill.position.y = 1.02 + 0.68 * cpu;
-    const ram = s.ram.usedGB / s.ram.totalGB;
-    this.cpuLabel.element.textContent = `${cpu ? 'CPU 1/1 busy' : 'CPU idle'} · RAM ${s.ram.usedGB}/${s.ram.totalGB} GB`;
-    this.ramFill.scale.y = Math.max(0.001, ram);
-    this.ramFill.position.y = 1.02 + 0.68 * ram;
+    this.layoutBenches(Math.max(1, s.workers.length));
+    const armed = s.watchers.some((w) => w.armed);
+    s.workers.forEach((w) => {
+      const b = this.benches[w.idx];
+      if (!b) return;
+      const t = w.active ? s.tasks.find((x) => x.id === w.active!.taskId) : null;
+      const short: Record<string, string> = { preview_logo: '', launch: 'Launch', feedback: 'Feedback', partner: 'Partner' };
+      const name = s.workers.length > 1 ? `W${w.idx + 1}` : s.build.agentName;
+      b.project({
+        active: w.active,
+        time: s.time,
+        pulse,
+        accent: this.accent,
+        detail: this.detail,
+        reduceMotion: this.reduceMotion,
+        now: this.now,
+        taskTitle: t && s.tasks.length > 1 ? short[t.responsibility] : null,
+        name,
+        idleText: this.detail ? `${name} · idle${armed ? ' · watcher armed' : ''}` : `${name} · idle`,
+        ram: { used: s.ram.usedGB, total: s.ram.totalGB },
+      });
+      const packet = [...s.trace].reverse().find((e) => e.packet && e.worker === w.idx)?.packet ?? null;
+      b.setTiles(packet);
+    });
 
-    // Task card & progress
-    if (active) {
-      this.taskCard.visible = true;
-      const u = (s.time - active.start) / Math.max(1, active.end - active.start);
-      this.progress.scale.x = Math.max(0.01, Math.min(1, u));
-      this.progress.position.x = -0.5 + 0.5 * this.progress.scale.x;
-      const left = Math.max(0, active.end - s.time) / 1000;
-      const mm = Math.floor(left / 60);
-      const ss = Math.floor(left % 60);
-      this.taskLabel.element.textContent = this.detail
-        ? `${active.taskId} · ${STEP_INFO[active.step.kind].label}${active.step.kind === 'decide' ? ` (${MODELS[active.step.model ?? 'swift'].name})` : ''} · ${mm}:${String(ss).padStart(2, '0')} left`
-        : `${STEP_INFO[active.step.kind].label}`;
-      ((this.taskCard.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).color.copy(this.accent);
-      this.benchLabel.element.textContent = `${s.build.agentName} · working`;
-      if (!this.reduceMotion) this.taskCard.position.y = 1.6 + Math.sin(this.now / 400) * 0.04;
-    } else {
-      this.taskCard.visible = false;
-      const armed = s.watchers.some((w) => w.armed);
-      this.benchLabel.element.textContent = this.detail ? `${s.build.agentName} · idle · 0 active workers${armed ? ' · watcher armed' : ''}` : `${s.build.agentName} · idle`;
-    }
-
-    // Context tray: show the latest packet for this worker
-    const lastPacket = [...s.trace].reverse().find((e) => e.packet && e.worker === 0)?.packet;
-    if (lastPacket) {
-      this.setTrayTiles(lastPacket.tiles);
-      const ex = lastPacket.tiles.filter((t) => !t.included).length;
-      this.trayLabel.element.textContent = `Context ${lastPacket.used}/${lastPacket.capacity} units${ex ? ` · ${ex} left out` : ''}`;
-    } else {
-      this.setTrayTiles([]);
-      this.trayLabel.element.textContent = 'Context tray · empty';
+    // Live monitor
+    const lk = `${s.world.live.version}:${s.world.live.logoRev}`;
+    if (lk !== this.liveKey) {
+      this.liveKey = lk;
+      this.drawLive(s.world.live.logoRev, s.world.live.version);
+      this.liveLabel.element.textContent = s.world.live.changedBy ? `Live page · v${s.world.live.version} · published` : s.goal === 'preview' ? 'Live page · protected' : 'Live page · needs Maya’s OK';
     }
 
     this.journalLabel.element.textContent = `Journal · ${s.journal.length} entries`;
@@ -793,6 +703,15 @@ export class BoardScene {
     this.flyers.push({ mesh, path: [a, c, b], t0: this.now, dur, done });
   }
 
+  /** Which worker a delivered message goes to (for the flying-envelope animation). */
+  private ownerOf(e: TraceEntry): number {
+    const s = this.sim?.state;
+    if (!s) return 0;
+    const want = /Feedback/i.test(e.text) ? 'feedback' : /confirmed/i.test(e.text) ? 'partner' : null;
+    const t = s.tasks.find((x) => (want ? x.responsibility === want : x.responsibility === 'launch' || x.responsibility === 'preview_logo'));
+    return t?.owner ?? 0;
+  }
+
   private animate(e: TraceEntry) {
     switch (e.kind) {
       case 'world': {
@@ -806,27 +725,34 @@ export class BoardScene {
         const env = this.envelope('#fde68a');
         this.fly(env, POS.inbox, POS.watcher, 700, () => {
           const env2 = this.envelope(this.accent.getStyle());
-          this.fly(env2, POS.watcher, POS.bench, 700);
+          this.fly(env2, POS.watcher, this.benchPos(this.ownerOf(e)), 700);
         });
         break;
       }
       case 'write': {
+        const from = this.benchPos(e.worker);
+        if (/Live page published/.test(e.text)) {
+          this.fly(this.envelope('#4ade80'), from, POS.live, 900);
+          break;
+        }
         if (!/saved/.test(e.text)) break;
         const card = this.envelope(this.accent.getStyle());
-        this.fly(card, POS.bench, POS.preview, 900);
+        this.fly(card, from, /board|message/.test(e.text) ? POS.shelf : POS.preview, 900);
         const copy = this.envelope(this.accent.getStyle());
-        this.fly(copy, POS.bench, POS.shelf, 900);
+        this.fly(copy, from, POS.shelf, 900);
         break;
       }
       case 'verify':
         if (/Verified/.test(e.text)) this.receiptGlow = 1;
         break;
       case 'permission': {
+        if (!/blocks/.test(e.text)) break;
+        const from = this.benchPos(e.worker);
         const card = this.envelope('#f87171');
-        this.fly(card, POS.bench, POS.live, 700, () => {
+        this.fly(card, from, POS.live, 700, () => {
           this.liveFlash = 1;
           const back = this.envelope('#f87171');
-          this.fly(back, POS.live, POS.bench, 600);
+          this.fly(back, POS.live, from, 600);
         });
         break;
       }

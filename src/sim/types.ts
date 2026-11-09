@@ -57,7 +57,7 @@ export const MODELS: Record<ModelId, ModelProfile> = {
 };
 
 export interface MachinePlan {
-  id: 'compact';
+  id: MachineId;
   name: string;
   cores: number;
   ramGB: number;
@@ -65,8 +65,11 @@ export interface MachinePlan {
   rent: number;
 }
 
-export const MACHINES: Record<'compact', MachinePlan> = {
+export type MachineId = 'compact' | 'team';
+
+export const MACHINES: Record<MachineId, MachinePlan> = {
   compact: { id: 'compact', name: 'Compact', cores: 1, ramGB: 2, workerSlots: 1, rent: 8 },
+  team: { id: 'team', name: 'Team', cores: 2, ramGB: 4, workerSlots: 2, rent: 22 },
 };
 
 // ---------------------------------------------------------------------------
@@ -80,16 +83,38 @@ export type StepKind =
   | 'render'
   | 'write_preview'
   | 'verify_preview'
-  | 'publish_live';
+  | 'publish_live'
+  | 'request_approval'
+  | 'verify_live'
+  | 'read_feedback'
+  | 'save_board'
+  | 'read_draft'
+  | 'format_message'
+  | 'save_message'
+  | 'wait_launch'
+  | 'send_partner'
+  | 'verify_sent';
+
+/** What a Decide step is for. Logo decisions use the context-tray rules; the rest are shift work. */
+export type DecidePurpose =
+  | 'logo'
+  | 'approval_check'
+  | 'sort_complete'
+  | 'sort_incomplete'
+  | 'sort_all'
+  | 'reduce'
+  | 'partner_prepare'
+  | 'partner_check';
 
 export interface StepDef {
   kind: StepKind;
   model?: ModelId;
+  purpose?: DecidePurpose;
 }
 
 export type WakeRule = 'once' | 'keep';
 export type ContextRule = 'focused' | 'full';
-export type Responsibility = 'preview_logo';
+export type Responsibility = 'preview_logo' | 'launch' | 'feedback' | 'partner';
 
 export interface WatcherCfg {
   card: 'inbox';
@@ -105,6 +130,8 @@ export interface WorkerCfg {
   templateId: string | null;
   /** Which brand-guide file a "Read brand guide" step reads. */
   guide?: GuideChoice;
+  /** Per-responsibility procedures (shift missions). Falls back to `procedure`. */
+  procedures?: Partial<Record<Responsibility, StepDef[]>>;
 }
 
 export type GuideChoice = 'none' | 'full' | 'summary';
@@ -113,7 +140,9 @@ export interface Build {
   name: string;
   agentName: string;
   accent: string;
-  machine: 'compact';
+  machine: MachineId;
+  /** Optional jobs the player accepted (shift missions). */
+  accepted?: Responsibility[];
   watchers: (WatcherCfg | null)[];
   workers: (WorkerCfg | null)[];
 }
@@ -122,6 +151,7 @@ export interface Build {
 // Fixture (content)
 
 export type PersonId = 'maya' | 'isha' | 'leo' | 'nora';
+export type TriggerKind = 'logo' | 'feedback' | 'confirm';
 
 export interface FixtureMessage {
   id: string;
@@ -130,6 +160,8 @@ export interface FixtureMessage {
   subject: string;
   body: string;
   attachment?: { id: string; name: string; logoRev: number };
+  /** What kind of work this message can trigger. Logo messages are inferred from the attachment. */
+  kind?: TriggerKind;
   /** Pre-existing messages are already in the inbox at shift start. */
   preexisting?: boolean;
 }
@@ -144,10 +176,15 @@ export interface Fixture {
   /** Earliest time the player can choose to end the run once everything is terminal. */
   endOfferAfter: Ms;
   budget: number;
-  machine: 'compact';
+  machine: MachineId;
   messages: FixtureMessage[];
+  /** What the evaluator checks: the preview page, the live page, or a whole shift of jobs. */
+  goal?: 'preview' | 'live' | 'shift';
+  /** Who can approve, until when, and how long a reply takes. */
+  approver?: { who: PersonId; until: Ms; replyAfter: Ms };
+  deadlines?: Partial<Record<Responsibility | 'feedback_early', Ms>>;
   availability: Record<string, { label: string; until: Ms }>;
-  delegation: { preview: 'edit'; live: 'none' };
+  delegation: { preview: 'edit'; live: 'none' | 'approval' };
   /** Files on the shared shelf at shift start that no step reads by default. */
   shelfFiles: { id: string; name: string; units: number; kind?: 'full' | 'summary'; tagline?: string }[];
   /** The job also requires the brand tagline on the preview. */
@@ -161,6 +198,7 @@ export type TaskStatus =
   | 'READY'
   | 'RUNNING'
   | 'WAITING_EVENT'
+  | 'WAITING_APPROVAL'
   | 'WAITING_RESOURCE'
   | 'WAITING_BUDGET'
   | 'DONE'
@@ -176,7 +214,7 @@ export interface ContextTile {
   included: boolean;
   reason: string;
   /** Typed content the authored rules can read (the label is only presentation). */
-  data?: { logoRev?: number | null; tagline?: string | null; needsTagline?: boolean };
+  data?: { logoRev?: number | null; tagline?: string | null; needsTagline?: boolean; version?: number | null };
 }
 
 export interface ContextPacket {
@@ -189,6 +227,8 @@ export interface ContextPacket {
 export type Proposal =
   | { kind: 'update_preview'; logoRev: number; tagline: string | null }
   | { kind: 'no_change'; logoRev: number }
+  | { kind: 'publish'; version: number }
+  | { kind: 'work'; summary: string }
   | { kind: 'need_evidence'; what: string };
 
 export interface RunNotes {
@@ -201,6 +241,12 @@ export interface RunNotes {
   written?: { version: number; logoRev: number; tagline: string | null };
   receipt?: { version: number; logoRev: number; at: Ms };
   blocked?: string[];
+  approval?: { version: number; at: Ms };
+  approvalRequestedAt?: Ms;
+  sorted?: { complete: number; incomplete: number; reduced: boolean };
+  feedbackRead?: boolean;
+  draftRead?: boolean;
+  message?: { formatted: boolean; saved: boolean; sent: boolean };
 }
 
 export interface TaskRun {
@@ -285,7 +331,10 @@ export interface WorldState {
     tagline: string | null;
     history: { version: number; logoRev: number | null; tagline: string | null; at: Ms; writer: string }[];
   };
-  live: { version: number; changedBy: string | null };
+  live: { version: number; changedBy: string | null; logoRev: number | null; approvedVersion: number | null; at: Ms | null };
+  approvals: { version: number; at: Ms; requestedAt: Ms }[];
+  board: { items: number; at: Ms } | null;
+  partnerMessage: { at: Ms; liveRev: number | null } | null;
   latestLogoRevSent: number;
   mayaThanked: boolean;
 }
@@ -325,7 +374,8 @@ export interface QueuedEvent {
   t: Ms;
   phase: number;
   seq: number;
-  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'end';
+  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'approval' | 'end';
+  taskId?: string;
   msgId?: string;
   watcher?: number;
   worker?: number;
@@ -357,6 +407,7 @@ export interface SimState {
   trace: TraceEntry[];
   violations: string[];
   needsTagline: boolean;
+  goal: 'preview' | 'live' | 'shift';
   blockedProposals: number;
   ended: boolean;
 }

@@ -1,5 +1,5 @@
 // Deterministic context packing (spec §11.2). Units are a game abstraction, not real tokens.
-import { MODELS, type ContextPacket, type ContextRule, type ContextTile, type Fixture, type ModelId, type TaskRun } from './types';
+import { MODELS, type ContextPacket, type ContextRule, type ContextTile, type DecidePurpose, type Fixture, type ModelId, type TaskRun } from './types';
 import { fmtTime } from './types';
 
 type Candidate = Omit<ContextTile, 'included' | 'reason'> & { mandatory?: boolean; skipReason?: string };
@@ -100,4 +100,59 @@ export function packContext(run: TaskRun, fixture: Fixture, model: ModelId, rule
     }
   }
   return { model, capacity, used, tiles };
+}
+
+type T = Omit<ContextTile, 'included' | 'reason'>;
+
+/** Packets for shift work. Small, explicit tiles; whole tiles fit or stay out with a reason. */
+export function shiftPacket(run: TaskRun, purpose: DecidePurpose, model: ModelId): ContextPacket {
+  const n = run.notes;
+  const tiles: T[] = [{ id: 'header', label: 'Runtime + tool schema', units: 2, source: 'runtime', category: 'header' }];
+  const add = (t: T) => tiles.push(t);
+  switch (purpose) {
+    case 'approval_check':
+      add({ id: 'goal', label: 'Goal: publish the approved launch page', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'constraint', label: 'Maya: publish only the version I approved', units: 2, source: 'Maya’s message', category: 'pinned' });
+      if (n.written) add({ id: 'draft', label: `Current draft: version ${n.written.version}`, units: 2, source: 'shelf', category: 'retrieved', data: { version: n.written.version } });
+      if (n.approval) add({ id: 'approval', label: `Maya’s approval for version ${n.approval.version}`, units: 1, source: 'Maya’s reply', category: 'retrieved', data: { version: n.approval.version } });
+      break;
+    case 'sort_complete':
+      add({ id: 'goal', label: 'Goal: categorise feedback (Bug / Feature / Question)', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'batch', label: '3 complete threads (thread_complete = true)', units: 4, source: 'Fetch feedback', category: 'retrieved' });
+      break;
+    case 'sort_incomplete':
+      add({ id: 'goal', label: 'Goal: categorise feedback; mark conflicts for follow-up', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'batch', label: '3 incomplete threads + their linked evidence', units: 9, source: 'Fetch feedback', category: 'retrieved' });
+      break;
+    case 'sort_all':
+      add({ id: 'goal', label: 'Goal: categorise feedback; mark conflicts for follow-up', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'batch', label: '4 mixed threads + linked evidence', units: 8, source: 'Fetch feedback', category: 'retrieved' });
+      break;
+    case 'reduce':
+      add({ id: 'goal', label: 'Goal: one board Maya can read', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'results', label: '12 structured category records', units: 3, source: 'earlier decisions', category: 'retrieved' });
+      break;
+    case 'partner_prepare':
+      add({ id: 'goal', label: 'Goal: Nora’s announcement from the approved template', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'template', label: 'Partner template (pre-approved)', units: 2, source: 'shelf', category: 'pinned' });
+      add({ id: 'facts', label: 'Release facts from the draft', units: 2, source: 'Read release draft', category: 'retrieved' });
+      break;
+    case 'partner_check':
+      add({ id: 'goal', label: 'Goal: send only verified live facts', units: 1, source: 'task card', category: 'pinned' });
+      add({ id: 'message', label: 'Prepared message draft', units: 2, source: 'shelf', category: 'retrieved' });
+      add({ id: 'live', label: 'Verified live page facts', units: 2, source: 'launch receipt', category: 'retrieved' });
+      break;
+    default:
+      break;
+  }
+  const capacity = MODELS[model].capacity;
+  let used = 0;
+  const packed: ContextTile[] = tiles.map((t) => {
+    if (used + t.units <= capacity) {
+      used += t.units;
+      return { ...t, included: true, reason: t.category === 'header' ? 'Always included' : t.category === 'pinned' ? 'Pinned' : 'Selected for this step' };
+    }
+    return { ...t, included: false, reason: `Doesn’t fit: needs ${t.units} units, ${capacity - used} of ${capacity} left (${MODELS[model].name})` };
+  });
+  return { model, capacity, used, tiles: packed };
 }

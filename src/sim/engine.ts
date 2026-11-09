@@ -1,8 +1,8 @@
 // Simulation core (spec §13). A deterministic discrete-event simulation with integer
 // millisecond time. World state (what actually happened) is kept apart from agent state
 // (what Relay observed and recorded). The decision engine only ever sees context packets.
-import { packContext } from './context';
-import { decide } from './rules';
+import { packContext, shiftPacket } from './context';
+import { decide, decideWork } from './rules';
 import { STEP_INFO, stepCredits, stepDuration } from './steps';
 import { MAYA_THANKS } from '../content/opening';
 import {
@@ -14,9 +14,11 @@ import {
   type FixtureMessage,
   type Ms,
   type QueuedEvent,
+  type Responsibility,
   type SimState,
   type Task,
   type TraceEntry,
+  type TriggerKind,
 } from './types';
 import { stepLabel } from './steps';
 
@@ -25,10 +27,30 @@ export const PHASE = { external: 1, commit: 2, reply: 3, runtime: 4, verify: 5, 
 
 const clone = <T>(v: T): T => structuredClone(v);
 
-function matchesWatcher(msg: FixtureMessage): boolean {
-  // Inbox watcher filter: messages from Isha that carry a logo attachment.
-  return msg.from === 'isha' && !!msg.attachment;
+const PEOPLE_NAMES: Record<string, string> = { maya: 'Maya', isha: 'Isha', leo: 'Leo', nora: 'Nora' };
+
+export function triggerOf(msg: FixtureMessage): TriggerKind | null {
+  return msg.kind ?? (msg.from === 'isha' && msg.attachment ? 'logo' : null);
 }
+
+export function triggerFor(r: Responsibility): TriggerKind {
+  return r === 'feedback' ? 'feedback' : r === 'partner' ? 'confirm' : 'logo';
+}
+
+const OPTIONAL: Responsibility[] = ['feedback', 'partner'];
+
+export const TASK_TITLES: Record<Responsibility, string> = {
+  preview_logo: 'Put Isha’s logo on the preview',
+  launch: 'Publish the approved launch page',
+  feedback: 'Prepare the feedback board',
+  partner: 'Send Nora the partner message',
+};
+
+const WAIT_LABELS: Record<TriggerKind, string> = {
+  logo: 'Waiting for Isha’s logo',
+  feedback: 'Waiting for the feedback bundle',
+  confirm: 'Waiting for Nora to confirm',
+};
 
 export class Sim {
   state: SimState;
@@ -55,7 +77,10 @@ export class Sim {
       world: {
         inbox: fixture.messages.filter((m) => m.preexisting).map((m) => ({ ...m, arrivedAt: m.at })),
         preview: { version: 1, logoRev: null, tagline: null, history: [{ version: 1, logoRev: null, tagline: null, at: fixture.start, writer: 'Maya' }] },
-        live: { version: 1, changedBy: null },
+        live: { version: 1, changedBy: null, logoRev: null, approvedVersion: null, at: null },
+        approvals: [],
+        board: null,
+        partnerMessage: null,
         latestLogoRevSent: 0,
         mayaThanked: false,
       },
@@ -71,6 +96,7 @@ export class Sim {
       trace: [],
       violations: [],
       needsTagline: !!fixture.needsTagline,
+      goal: fixture.goal ?? 'preview',
       blockedProposals: 0,
       ended: false,
     };
@@ -95,15 +121,16 @@ export class Sim {
     s.build.workers.forEach((w, idx) => {
       if (!w) return;
       s.workers.push({ idx, active: null });
-      if (w.responsibilities.includes('preview_logo')) {
+      for (const r of w.responsibilities) {
+        if (OPTIONAL.includes(r) && !s.build.accepted?.includes(r)) continue;
         const task: Task = {
           id: `T${s.tasks.length + 1}`,
-          title: 'Put Isha’s logo on the preview',
-          responsibility: 'preview_logo',
+          title: TASK_TITLES[r],
+          responsibility: r,
           owner: idx,
           revision: 1,
           status: 'WAITING_EVENT',
-          waitLabel: 'Waiting for Isha’s logo',
+          waitLabel: WAIT_LABELS[triggerFor(r)],
           stepIdx: 0,
           run: null,
           pendingLogoRev: null,
@@ -118,9 +145,7 @@ export class Sim {
     s.build.watchers.forEach((w, idx) => {
       if (!w || !w.wake) return;
       s.watchers.push({ idx, armed: true, wake: w.wake, closedReason: null, delivered: [], configVersion: 1 });
-      this.journal(
-        `Watcher armed: inbox, messages from Isha with a logo. Wake rule: ${w.wake === 'once' ? 'Check once' : 'Keep watching'}.`,
-      );
+      this.journal(`Watcher armed: inbox, messages for accepted jobs. Wake rule: ${w.wake === 'once' ? 'Check once' : 'Keep watching'}.`);
     });
     this.trace({ kind: 'watcher', actor: 'relay', text: 'Inbox watcher armed; worker idle. No model is running.', cause: start });
 
@@ -191,8 +216,13 @@ export class Sim {
     return this.state.workers.every((w) => !w.active) && this.state.tasks.every((t) => !t.run);
   }
 
+  /** Nothing can progress any more: no worker busy, nothing runnable, and no future events except the end. */
   canOfferEnd(): boolean {
-    return !this.state.ended && this.state.time >= this.fixture.endOfferAfter && this.isIdle();
+    const s = this.state;
+    if (s.ended || s.time < this.fixture.endOfferAfter) return false;
+    if (s.workers.some((w) => w.active)) return false;
+    if (s.tasks.some((t) => t.run && t.status === 'READY')) return false;
+    return s.queue.every((e) => e.kind === 'end' || e.kind === 'dispatch');
   }
 
   // -------------------------------------------------------------------------
@@ -212,9 +242,11 @@ export class Sim {
         return this.onStepDone(ev.worker!);
       case 'reaction':
         return this.onReaction(ev.cause ?? null);
+      case 'approval':
+        return this.onApproval(ev.taskId!, ev.cause ?? null);
       case 'end':
         this.state.ended = true;
-        this.trace({ kind: 'shift', actor: 'world', text: `The opening ends at ${fmtTime(this.state.time)}.` });
+        this.trace({ kind: 'shift', actor: 'world', text: `The evening ends at ${fmtTime(this.state.time)}.` });
         return;
     }
   }
@@ -227,11 +259,16 @@ export class Sim {
     const id = this.trace({
       kind: 'world',
       actor: 'world',
-      text: `Isha emails “${m.subject}” with ${m.attachment?.name ?? 'no attachment'}.`,
+      text: `${PEOPLE_NAMES[m.from]} emails “${m.subject}”${m.attachment ? ` with ${m.attachment.name}` : ''}.`,
       detail: m.body,
       observerOnly: true,
     });
-    if (!matchesWatcher(m)) return;
+    const kind = triggerOf(m);
+    if (!kind || !s.tasks.some((t) => triggerFor(t.responsibility) === kind)) {
+      if (kind)
+        this.trace({ kind: 'watcher', actor: 'world', text: 'No accepted job needs this message, so the watcher ignores it.', cause: id, observerOnly: true });
+      return;
+    }
     const armed = s.watchers.filter((w) => w.armed);
     if (!armed.length) {
       this.trace({
@@ -252,30 +289,43 @@ export class Sim {
     if (!w.armed || w.delivered.includes(msgId)) return;
     const m = s.world.inbox.find((x) => x.id === msgId)!;
     w.delivered.push(msgId);
+    const what = m.attachment ? m.attachment.name : `“${m.subject}”`;
     const d = this.trace({
       kind: 'deliver',
       actor: 'relay',
-      text: `Watcher delivers Isha’s message (${m.attachment!.name}) to Relay.`,
+      text: `Watcher delivers ${PEOPLE_NAMES[m.from]}’s message (${what}) to ${s.build.agentName}.`,
       detail: `Occurred ${fmtTime(m.arrivedAt)}, delivered ${fmtTime(s.time)}.`,
       cause,
     });
-    this.journal(`Event recorded: ${m.attachment!.name} from Isha.`);
+    this.journal(`Event recorded: ${what} from ${PEOPLE_NAMES[m.from]}.`);
     if (w.wake === 'once') {
       w.armed = false;
       w.closedReason = `“Check once” rule satisfied at ${fmtTime(s.time)}; watcher closed.`;
       this.trace({ kind: 'watcher', actor: 'relay', text: w.closedReason, cause: d });
       this.journal('Watcher closed (Check once rule).');
     }
-    const target = s.build.watchers[wIdx]?.deliverTo;
-    const task = s.tasks.find((t) => t.owner === target && t.responsibility === 'preview_logo');
-    if (task) this.receiveLogo(task, m.attachment!.logoRev, m.attachment!.id, d);
+    const kind = triggerOf(m);
+    for (const task of s.tasks.filter((t) => triggerFor(t.responsibility) === kind)) {
+      if (task.responsibility === 'preview_logo') this.receiveLogo(task, m.attachment!.logoRev, m.attachment!.id, d);
+      else this.receiveWork(task, m.attachment?.logoRev ?? 0, m.attachment?.id ?? m.id, d);
+    }
+  }
+
+  /** One-shot jobs (launch, feedback, partner): start once when their trigger arrives. */
+  private receiveWork(task: Task, rev: number, ref: string, cause: number) {
+    if (task.run || task.runs.length) return;
+    this.startRun(task, rev, ref, cause);
+    this.enqueue({ t: this.state.time, phase: PHASE.runtime, kind: 'dispatch' });
   }
 
   private onWatcherSync(wIdx: number, cause: number | null) {
     const s = this.state;
     const w = s.watchers.find((x) => x.idx === wIdx);
     if (!w || !w.armed) return;
-    const pending = s.world.inbox.filter((m) => matchesWatcher(m) && !w.delivered.includes(m.id));
+    const pending = s.world.inbox.filter((m) => {
+      const k = triggerOf(m);
+      return k && s.tasks.some((t) => triggerFor(t.responsibility) === k) && !w.delivered.includes(m.id);
+    });
     const id = this.trace({
       kind: 'watcher',
       actor: 'relay',
@@ -320,7 +370,7 @@ export class Sim {
       logoRev: rev,
       attachmentId,
       configVersion: s.configVersion,
-      procedure: clone(cfg.procedure),
+      procedure: clone(cfg.procedures?.[task.responsibility] ?? cfg.procedure),
       contextRule: cfg.contextRule,
       guide: cfg.guide ?? 'none',
       startedAt: s.time,
@@ -334,10 +384,10 @@ export class Sim {
       kind: 'task',
       actor: 'relay',
       taskId: task.id,
-      text: `${task.id} wakes for logo revision ${rev} (run #${task.run.n}).`,
+      text: task.responsibility === 'preview_logo' ? `${task.id} wakes for logo revision ${rev} (run #${task.run.n}).` : `${task.id} wakes: ${task.title}.`,
       cause,
     });
-    this.journal(`${task.id} run #${task.run.n} started for logo revision ${rev}.`);
+    this.journal(`${task.id} run #${task.run.n} started${task.responsibility === 'preview_logo' ? ` for logo revision ${rev}` : ''}.`);
   }
 
   private onDispatch() {
@@ -359,6 +409,17 @@ export class Sim {
     // Skip steps that are no longer needed or finish the run.
     while (task.stepIdx < run.procedure.length) {
       const st = run.procedure[task.stepIdx];
+      if (st.kind === 'wait_launch') {
+        if (this.launchDone()) {
+          this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'The launch page is live and checked — continue.' });
+          task.stepIdx++;
+          continue;
+        }
+        task.status = 'WAITING_EVENT';
+        task.waitLabel = 'Waiting for the launch page to go live';
+        this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} waits for the launch receipt. The worker is free meanwhile.` });
+        return;
+      }
       const skip =
         run.notes.proposal?.kind === 'no_change' && (st.kind === 'render' || st.kind === 'write_preview');
       if (!skip) break;
@@ -384,20 +445,35 @@ export class Sim {
       return;
     }
 
-    if (step.kind === 'publish_live' && this.fixture.delegation.live === 'none') {
-      s.blockedProposals++;
-      (run.notes.blocked ??= []).push('publish_live');
-      this.trace({
-        kind: 'permission',
-        actor: 'relay',
-        taskId: task.id,
-        worker: wIdx,
-        text: 'Permission gate blocks “Publish to live page”: Maya did not delegate live changes. Nothing was sent.',
-        detail: 'A blocked proposal is not a violation. It costs the time spent forming it, but no credits and no world effect.',
-      });
+    let publishAllowed = false;
+    if (step.kind === 'publish_live') {
+      const n = run.notes;
+      publishAllowed = this.fixture.delegation.live === 'approval' && !!n.approval && !!n.written && n.approval.version === n.written.version;
+      if (!publishAllowed) {
+        s.blockedProposals++;
+        (n.blocked ??= []).push('publish_live');
+        this.trace({
+          kind: 'permission',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text:
+            this.fixture.delegation.live === 'none'
+              ? 'Permission gate blocks “Publish to live page”: Maya did not delegate live changes. Nothing was sent.'
+              : `Permission gate blocks “Publish to live page”: no approval from Maya for this exact draft${n.approval ? ` (approved v${n.approval.version}, draft is v${n.written?.version})` : ''}. Nothing was sent.`,
+          detail: 'A blocked proposal is not a violation. It costs the time spent forming it, but no credits and no world effect.',
+        });
+      } else
+        this.trace({
+          kind: 'permission',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: `Permission gate allows the publish: Maya approved draft v${n.approval!.version}, which is the draft being published.`,
+        });
     }
 
-    const credits = step.kind === 'publish_live' ? 0 : stepCredits(step);
+    const credits = step.kind === 'publish_live' && !publishAllowed ? 0 : stepCredits(step);
     if (s.credits.spent + credits > s.credits.budget) {
       if (task.status !== 'WAITING_BUDGET')
         this.trace({ kind: 'budget', actor: 'relay', taskId: task.id, text: `Not enough credits for “${stepLabel(step)}” (${credits}). Waiting for budget.` });
@@ -413,8 +489,14 @@ export class Sim {
 
     this.charge(credits, `${task.id}: ${stepLabel(step)}`);
     s.ram.usedGB = round1(s.ram.usedGB + info.ramGB);
-    const dur = stepDuration(step, s.cores);
-    const packet = step.kind === 'decide' ? packContext(run, this.fixture, step.model ?? 'swift', run.contextRule) : undefined;
+    const dur = step.kind === 'publish_live' && !publishAllowed ? 0.5 * MIN : stepDuration(step, s.cores);
+    const purpose = step.purpose ?? 'logo';
+    const packet =
+      step.kind === 'decide'
+        ? purpose === 'logo'
+          ? packContext(run, this.fixture, step.model ?? 'swift', run.contextRule)
+          : shiftPacket(run, purpose, step.model ?? 'swift')
+        : undefined;
     const traceId = this.trace({
       kind: 'step_start',
       actor: 'relay',
@@ -441,7 +523,7 @@ export class Sim {
     task.waitLabel = '';
     this.enqueue({
       t: s.time + dur,
-      phase: step.kind === 'verify_preview' ? PHASE.verify : PHASE.reply,
+      phase: step.kind.startsWith('verify') ? PHASE.verify : PHASE.reply,
       kind: 'step_done',
       worker: wIdx,
     });
@@ -495,6 +577,42 @@ export class Sim {
         break;
       }
       case 'decide': {
+        const purpose = a.step.purpose ?? 'logo';
+        if (purpose !== 'logo') {
+          const d = decideWork(purpose, a.packet!);
+          this.trace({
+            kind: 'decision',
+            actor: 'relay',
+            taskId: task.id,
+            worker: wIdx,
+            text:
+              d.proposal.kind === 'publish'
+                ? `Decision: Maya’s approval matches draft v${d.proposal.version} — publish it.`
+                : d.proposal.kind === 'need_evidence'
+                  ? `Decision: can’t continue — needs ${d.proposal.what}.`
+                  : `Decision (${stepLabel(a.step)}): ${d.explanation}`,
+            detail: `Simulation explanation — rule “${d.rule}”: ${d.explanation}`,
+            packet: a.packet,
+            cause,
+          });
+          if (d.proposal.kind === 'need_evidence') {
+            task.status = 'FAILED';
+            task.waitLabel = `Needs ${d.proposal.what}`;
+            task.runs.push({ ...run, finishedAt: s.time });
+            task.run = null;
+            return this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+          }
+          const so = (n.sorted ??= { complete: 0, incomplete: 0, reduced: false });
+          if (purpose === 'sort_complete') so.complete += 3;
+          if (purpose === 'sort_incomplete') so.incomplete += 3;
+          if (purpose === 'sort_all') {
+            const take = Math.min(4, 12 - so.complete - so.incomplete);
+            so.complete += Math.min(take, 3);
+            so.incomplete += take - Math.min(take, 3);
+          }
+          if (purpose === 'reduce') so.reduced = true;
+          break;
+        }
         const d = decide(a.packet!);
         n.proposal = d.proposal;
         const text =
@@ -502,7 +620,7 @@ export class Sim {
             ? `Decision: render logo revision ${d.proposal.logoRev}${s.needsTagline ? (d.proposal.tagline ? ' with the tagline' : ' — tagline missing, no guide in the tray') : ''} and save it to the preview.`
             : d.proposal.kind === 'no_change'
               ? `Decision: preview already shows revision ${d.proposal.logoRev}; just verify.`
-              : `Decision: required evidence missing (${d.proposal.what}).`;
+              : `Decision: required evidence missing (${d.proposal.kind === 'need_evidence' ? d.proposal.what : ''}).`;
         this.trace({
           kind: 'decision',
           actor: 'relay',
@@ -565,7 +683,7 @@ export class Sim {
           text: `Preview page saved: version ${version} with logo revision ${rev}.`,
           cause,
         });
-        if (!s.world.mayaThanked) {
+        if (!s.world.mayaThanked && s.goal === 'preview') {
           s.world.mayaThanked = true;
           this.enqueue({ t: s.time + 1 * MIN, phase: PHASE.external, kind: 'reaction', cause: w });
         }
@@ -598,7 +716,94 @@ export class Sim {
         }
         break;
       }
-      case 'publish_live':
+      case 'publish_live': {
+        if (a.credits > 0 && n.written && n.approval) {
+          s.world.live = {
+            version: s.world.live.version + 1,
+            changedBy: s.build.agentName,
+            logoRev: n.written.logoRev,
+            approvedVersion: n.approval.version,
+            at: s.time,
+          };
+          this.trace({
+            kind: 'write',
+            actor: 'relay',
+            taskId: task.id,
+            worker: wIdx,
+            text: `Live page published: draft v${n.written.version} (one logical operation, key op-${task.id}-publish).`,
+            cause,
+          });
+        }
+        break;
+      }
+      case 'request_approval': {
+        const ap = this.fixture.approver;
+        n.approvalRequestedAt = s.time;
+        const v = n.written?.version ?? 0;
+        if (ap && s.time <= ap.until) {
+          this.trace({ kind: 'task', actor: 'relay', taskId: task.id, worker: wIdx, text: `Asked Maya to approve draft v${v}. Worker is free while she looks.`, cause });
+          this.enqueue({ t: s.time + ap.replyAfter, phase: PHASE.reply, kind: 'approval', taskId: task.id, cause });
+          task.waitLabel = `Waiting for Maya’s OK on draft v${v}`;
+        } else {
+          this.trace({
+            kind: 'task',
+            actor: 'relay',
+            taskId: task.id,
+            worker: wIdx,
+            text: `Maya left at ${ap ? fmtTime(ap.until) : '—'}. The approval request will wait until she is back.`,
+            cause,
+          });
+          task.waitLabel = 'Waiting for Maya — she has left';
+        }
+        task.stepIdx++;
+        task.status = 'WAITING_APPROVAL';
+        this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+        return;
+      }
+      case 'verify_live': {
+        if (n.written && s.world.live.logoRev === n.written.logoRev && s.world.live.changedBy) {
+          n.receipt = { version: s.world.live.version, logoRev: n.written.logoRev, at: s.time };
+          this.trace({ kind: 'verify', actor: 'relay', taskId: task.id, worker: wIdx, text: `Verified: the live page shows the approved draft. Receipt stored.`, cause });
+        } else
+          this.trace({ kind: 'verify', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Verification failed: the live page did not change.', cause });
+        break;
+      }
+      case 'read_feedback':
+        n.feedbackRead = true;
+        this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Fetched 12 feedback items: 9 complete threads, 3 incomplete.', cause });
+        break;
+      case 'save_board': {
+        const so = n.sorted ?? { complete: 0, incomplete: 0, reduced: false };
+        const items = so.complete + so.incomplete;
+        s.world.board = { items, at: s.time };
+        if (items >= 12 && so.reduced) {
+          n.receipt = { version: 1, logoRev: 0, at: s.time };
+          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Feedback board saved: all 12 items sorted. Receipt stored.', cause });
+        } else this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `Feedback board saved with only ${items}/12 items sorted.`, cause });
+        break;
+      }
+      case 'read_draft':
+        n.draftRead = true;
+        this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Read the release facts from the draft.', cause });
+        break;
+      case 'format_message':
+        (n.message ??= { formatted: false, saved: false, sent: false }).formatted = true;
+        this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Partner message formatted.', cause });
+        break;
+      case 'save_message':
+        (n.message ??= { formatted: false, saved: false, sent: false }).saved = true;
+        this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Partner message draft saved — it waits until the launch is live.', cause });
+        break;
+      case 'send_partner':
+        (n.message ??= { formatted: false, saved: false, sent: false }).sent = true;
+        s.world.partnerMessage = { at: s.time, liveRev: s.world.live.logoRev };
+        this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Sent Nora the announcement with the live link (pre-approved template).', cause });
+        break;
+      case 'verify_sent':
+        if (s.world.partnerMessage) {
+          n.receipt = { version: 1, logoRev: s.world.partnerMessage.liveRev ?? 0, at: s.time };
+          this.trace({ kind: 'verify', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Verified: Nora received the right message. Receipt stored.', cause });
+        }
         break;
     }
 
@@ -620,8 +825,21 @@ export class Sim {
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} cannot be marked done: no verification receipt.` });
       return;
     }
+    if (task.responsibility !== 'preview_logo') {
+      task.status = 'DONE';
+      task.waitLabel = '';
+      this.journal(`${task.id} done: ${task.title}.`);
+      this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} done: ${task.title}.` });
+      if (task.responsibility === 'launch')
+        for (const t of s.tasks)
+          if (t.run && t.status === 'WAITING_EVENT' && t.run.procedure[t.stepIdx]?.kind === 'wait_launch') {
+            t.status = 'READY';
+            t.waitLabel = '';
+          }
+      return;
+    }
     task.lastCompletedRev = run.logoRev;
-    this.journal(`${task.id} run #${run.n} done: preview verified with logo revision ${run.logoRev}.`);
+    this.journal(`${task.id} run #${run.n} done: ${s.goal === 'live' ? 'live page' : 'preview'} verified with logo revision ${run.logoRev}.`);
     if (task.pendingLogoRev) {
       const p = task.pendingLogoRev;
       task.pendingLogoRev = null;
@@ -638,6 +856,25 @@ export class Sim {
       task.waitLabel = '';
       this.trace({ kind: 'task', actor: 'relay', taskId: task.id, text: `${task.id} done for revision ${run.logoRev}. No watcher remains armed for it.` });
     }
+  }
+
+  private launchDone(): boolean {
+    return this.state.tasks.some((t) => t.responsibility === 'launch' && t.status === 'DONE');
+  }
+
+  private onApproval(taskId: string, cause: number | null) {
+    const s = this.state;
+    const task = s.tasks.find((t) => t.id === taskId);
+    if (!task?.run) return;
+    const n = task.run.notes;
+    const v = n.written?.version ?? 0;
+    n.approval = { version: v, at: s.time };
+    s.world.approvals.push({ version: v, at: s.time, requestedAt: n.approvalRequestedAt ?? s.time });
+    this.trace({ kind: 'reaction', actor: 'world', taskId, text: `Maya approves draft v${v}: “Looks right — go ahead.”`, cause });
+    this.journal(`Approval recorded: Maya approved draft v${v}.`);
+    task.status = 'READY';
+    task.waitLabel = '';
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
   }
 
   private onReaction(cause: number | null) {
