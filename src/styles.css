@@ -470,3 +470,4 @@ li.superseded { text-decoration: line-through; opacity: .6; }
   .shift-banner { grid-template-columns: 220px minmax(0, 1fr); }
   .shift-banner h3 { font-size: 20px; }
 }
+.lbl.person { font-size: 11px; background: rgba(15, 23, 42, .85); border-color: #3b4a6b; }

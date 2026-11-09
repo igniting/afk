@@ -85,7 +85,7 @@ export function evaluateOpening(
         ? j.offer
           ? 'not taken on'
           : 'declined'
-        : !check.ok && doneAt != null
+        : !check.ok && (doneAt != null || /blocked/.test(check.status))
           ? check.status
           : doneAt != null
             ? j.deadline != null && doneAt > j.deadline

@@ -30,6 +30,15 @@ const POS = {
   inbox: new THREE.Vector3(-4.7, 0, -3.5),
   preview: new THREE.Vector3(0.4, 0, -3.7),
   live: new THREE.Vector3(4.6, 0, -3.7),
+  gate: new THREE.Vector3(2.5, 0, -2.25),
+};
+
+/** Where each person stands in the outside world. */
+const CAST_POS: Record<string, { pos: THREE.Vector3; shirt: string; skin: string; hair: string; name: string }> = {
+  isha: { pos: new THREE.Vector3(-6.8, 0, -3.3), shirt: '#ec4899', skin: '#a8714a', hair: '#1c1917', name: 'Isha' },
+  leo: { pos: new THREE.Vector3(-3.2, 0, -3.6), shirt: '#38bdf8', skin: '#f1c9a5', hair: '#b45309', name: 'Leo' },
+  maya: { pos: new THREE.Vector3(6.95, 0, -3.5), shirt: '#f59e0b', skin: '#d6a77a', hair: '#3b2416', name: 'Maya' },
+  nora: { pos: new THREE.Vector3(-1.7, 0, -4.4), shirt: '#a3e635', skin: '#7c4a2d', hair: '#111827', name: 'Nora' },
 };
 
 interface Flyer {
@@ -97,6 +106,11 @@ export class BoardScene {
   private liveKey = '';
   private liveLabel!: CSS2DObject;
   private liveFlash = 0;
+  private gateLamp!: THREE.Mesh;
+  private gateFlash = 0;
+  private gateOk = 0;
+  private gateLabel!: CSS2DObject;
+  private cast: Record<string, { g: THREE.Group; mats: THREE.MeshStandardMaterial[]; l: CSS2DObject; bob: number }> = {};
   private receipt!: THREE.Mesh;
   private receiptGlow = 0;
   private selection!: THREE.Mesh;
@@ -113,7 +127,7 @@ export class BoardScene {
     host.appendChild(this.labels.domElement);
 
     this.scene.background = new THREE.Color('#0b1120');
-    this.scene.fog = new THREE.Fog('#0b1120', 22, 40);
+    this.scene.fog = new THREE.Fog('#0b1120', 30, 55);
     this.buildWorld();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
@@ -132,8 +146,14 @@ export class BoardScene {
 
   private buildWorld() {
     const s = this.scene;
-    s.add(new THREE.HemisphereLight('#c7d2fe', '#0b1120', 0.9));
-    const sun = new THREE.DirectionalLight('#ffffff', 1.6);
+    s.add(new THREE.HemisphereLight('#dbe4ff', '#1e293b', 1.35));
+    const warm = new THREE.PointLight('#fde68a', 1.1, 26, 1.4);
+    warm.position.set(-6, 6, 4);
+    s.add(warm);
+    const cool = new THREE.PointLight('#5eead4', 0.8, 24, 1.4);
+    cool.position.set(6, 5, -5);
+    s.add(cool);
+    const sun = new THREE.DirectionalLight('#ffffff', 1.8);
     sun.position.set(-5, 12, 8);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -144,7 +164,7 @@ export class BoardScene {
     board.position.set(0, -0.2, 0.75);
     board.receiveShadow = true;
     s.add(board);
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#111a2e'));
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#1a2540'));
     strip.position.set(0, -0.25, -3.6);
     strip.receiveShadow = true;
     s.add(strip);
@@ -159,7 +179,7 @@ export class BoardScene {
       ['Shared records', new THREE.Vector3(4.65, 0, 0.75), 3.6],
     ];
     for (const [name, p, w] of pads) {
-      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#273449'));
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#2c3b58'));
       pad.position.set(p.x, 0.03, p.z);
       pad.receiveShadow = true;
       s.add(pad);
@@ -172,6 +192,8 @@ export class BoardScene {
     this.buildBench();
     this.buildRecords();
     this.buildOutside();
+    this.buildGate();
+    this.buildCast();
 
     this.selection = new THREE.Mesh(
       new THREE.RingGeometry(1.3, 1.45, 48),
@@ -392,6 +414,68 @@ export class BoardScene {
     this.scene.add(this.receipt);
   }
 
+  /** The permission gate: every outside action passes under it. Flashes red when it blocks, green when it lets one through. */
+  private buildGate() {
+    const g = new THREE.Group();
+    const postMat = mat('#94a3b8', { metalness: 0.4 });
+    for (const x of [-0.75, 0.75]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.7, 0.16), postMat);
+      post.position.set(x, 0.85, 0);
+      post.castShadow = true;
+      g.add(post);
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.22, 0.22), mat('#fbbf24', { metalness: 0.2 }));
+    beam.position.y = 1.78;
+    beam.castShadow = true;
+    // Striped barrier arm
+    for (let i = 0; i < 5; i++) {
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.08), mat(i % 2 ? '#f8fafc' : '#ef4444'));
+      seg.position.set(-0.56 + i * 0.28, 0.75, 0.08);
+      g.add(seg);
+    }
+    this.gateLamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 16), mat('#475569', { emissive: '#000' }));
+    this.gateLamp.position.y = 2.06;
+    g.add(beam, this.gateLamp);
+    this.gateLabel = label('Permission gate', 'lbl obj');
+    this.gateLabel.position.set(0, 2.55, 0);
+    g.add(this.gateLabel);
+    g.position.copy(POS.gate);
+    this.scene.add(g);
+  }
+
+  /** The people Relay works for, standing in the outside world. Dimmed while they are away. */
+  private buildCast() {
+    for (const [id, c] of Object.entries(CAST_POS)) {
+      const g = new THREE.Group();
+      const shirt = mat(c.shirt, { transparent: true });
+      const skin = mat(c.skin, { transparent: true });
+      const hair = mat(c.hair, { transparent: true });
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.55, 6, 16), shirt);
+      body.position.y = 0.62;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 20), skin);
+      head.position.y = 1.36;
+      const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.29, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), hair);
+      hairCap.position.y = 1.4;
+      body.castShadow = head.castShadow = true;
+      g.add(body, head, hairCap);
+      const l = label(c.name, 'lbl person');
+      l.position.set(0, 1.95, 0);
+      g.add(l);
+      g.position.copy(c.pos);
+      g.lookAt(0, 0, 1);
+      this.scene.add(g);
+      this.cast[id] = { g, mats: [shirt, skin, hair], l, bob: 0 };
+    }
+  }
+
+  /** Is this person around right now? (Mission fixtures declare availability windows.) */
+  private present(sim: Sim, id: string): boolean {
+    const name = CAST_POS[id].name;
+    const w = sim.fixture.people?.[name]?.windows;
+    if (!w) return true;
+    return w.some(([a, b]) => sim.state.time >= a && sim.state.time <= b);
+  }
+
   private drawLive(rev: number | null, version: number) {
     drawPage(this.liveCanvas.getContext('2d')!, 512, 320, { title: 'lumen.app', logoRev: rev, locked: rev == null, version });
     this.liveTex.needsUpdate = true;
@@ -575,6 +659,26 @@ export class BoardScene {
     this.receiptGlow = Math.max(0, this.receiptGlow - dt * 0.35);
     (this.receipt.material as THREE.MeshBasicMaterial).opacity = this.receiptGlow * 0.9;
     this.liveFlash = Math.max(0, this.liveFlash - dt * 0.8);
+    this.gateFlash = Math.max(0, this.gateFlash - dt * 0.7);
+    this.gateOk = Math.max(0, this.gateOk - dt * 0.9);
+    const gl = this.gateLamp.material as THREE.MeshStandardMaterial;
+    if (this.gateFlash > 0.01) {
+      gl.color.set('#ef4444');
+      gl.emissive.setRGB(this.gateFlash * 1.2, 0, 0);
+    } else if (this.gateOk > 0.01) {
+      gl.color.set('#4ade80');
+      gl.emissive.setRGB(0, this.gateOk, this.gateOk * 0.4);
+    } else {
+      gl.color.set('#fbbf24');
+      gl.emissive.set('#000');
+    }
+    for (const [id, c] of Object.entries(this.cast)) {
+      const here = sim ? this.present(sim, id) : true;
+      for (const m of c.mats) m.opacity = here ? 1 : 0.28;
+      c.l.element.textContent = `${CAST_POS[id].name}${here ? '' : ' · away'}`;
+      c.bob = Math.max(0, c.bob - dt * 1.5);
+      c.g.position.y = this.reduceMotion ? 0 : Math.abs(Math.sin(c.bob * Math.PI * 3)) * 0.35 * c.bob;
+    }
     (this.liveLock.material as THREE.MeshStandardMaterial).emissive.setRGB(this.liveFlash, 0, 0);
 
     this.renderer.render(this.scene, this.camera);
@@ -729,6 +833,8 @@ export class BoardScene {
   private animate(e: TraceEntry) {
     switch (e.kind) {
       case 'world': {
+        const who = Object.keys(CAST_POS).find((id) => new RegExp(`\\b${CAST_POS[id].name}\\b`).test(e.text));
+        if (who) this.cast[who].bob = 1;
         const env = this.envelope('#fde68a');
         const sky = POS.inbox.clone().add(new THREE.Vector3(-1.5, 3, -1));
         this.fly(env, sky, POS.inbox, 800);
@@ -745,6 +851,20 @@ export class BoardScene {
       }
       case 'write': {
         const from = this.benchPos(e.worker);
+        const sent = /sent to ([^.,]+)/.exec(e.text);
+        if (sent) {
+          const who = Object.keys(CAST_POS).find((id) => sent[1].startsWith(CAST_POS[id].name));
+          const to = who ? CAST_POS[who].pos : new THREE.Vector3(7.2, 0, -5.2);
+          const bad = /violation/.test(e.text);
+          this.fly(this.envelope(bad ? '#f87171' : '#4ade80'), from, POS.gate, 650, () => {
+            if (bad) this.gateFlash = 1;
+            else this.gateOk = 1;
+            this.fly(this.envelope(bad ? '#f87171' : '#4ade80'), POS.gate, to, 650, () => {
+              if (who) this.cast[who].bob = 1;
+            });
+          });
+          break;
+        }
         if (/Live page published/.test(e.text)) {
           this.fly(this.envelope('#4ade80'), from, POS.live, 900);
           break;
@@ -763,10 +883,11 @@ export class BoardScene {
         if (!/blocks/.test(e.text)) break;
         const from = this.benchPos(e.worker);
         const card = this.envelope('#f87171');
-        this.fly(card, from, POS.live, 700, () => {
-          this.liveFlash = 1;
+        this.fly(card, from, POS.gate, 700, () => {
+          this.gateFlash = 1;
+          if (/live/.test(e.text)) this.liveFlash = 1;
           const back = this.envelope('#f87171');
-          this.fly(back, POS.live, from, 600);
+          this.fly(back, POS.gate, from, 600);
         });
         break;
       }
