@@ -92,4 +92,14 @@ The same engine powers interactive play and the headless tests.
   - Shift 6 *The weekend handoff* (21–23): admission control, multi-day durable waits, selective escalation.
 
   `tests/campaign.test.ts` proves, for every mission, which builds earn which medals.
-- **Later**: Failure Labs, save import/export UI, accessibility polish, performance checks.
+- **Phase 5 — Failure Labs** ✅ (spec §6.4, `src/content/labs.ts`) Five optional, disposable
+  experiments on the mission map. Each opens after the mission that teaches its protection,
+  replays the same small evening with the protection on and then removed, and awards no medals.
+  - *Forgotten rule* (after 4): the rule left off the tray → the gate blocks; no gate → a violation.
+  - *Blind retry* (after 6): a lost reply plus a blind resend → Nora gets two copies.
+  - *No journal* (after 12): a restart mid-render → without a journal the promise is forgotten.
+  - *Blind overwrite* (after 15): no version check → a lost update that every report calls “done”.
+  - *Memory overcommit* (after 16): no RAM admission → out of memory, a running job is killed.
+
+  `tests/labs.test.ts` proves both versions of every lab behave as described.
+- **Later**: save import/export UI, accessibility polish, performance checks.

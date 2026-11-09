@@ -286,6 +286,10 @@ export function opInfo(step: StepDef): { minutes: number; cpuMinutes: number; io
       return { ...base, minutes: op.minutes ?? 1, credits: op.credits ?? 1 };
     case 'send':
       return { ...base, minutes: op.minutes ?? 0.5, credits: op.credits ?? 1 };
+    case 'publish':
+      return { ...base, minutes: 1, credits: 1 };
+    case 'resend':
+      return { ...base, minutes: 0.5, credits: 1 };
     case 'cancel':
     case 'waitJob':
     case 'waitEvent':

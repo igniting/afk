@@ -12,6 +12,7 @@ import {
   fmtTime,
   type Build,
   type Fixture,
+  type LabFlags,
   type FixtureMessage,
   type Ms,
   type QueuedEvent,
@@ -169,6 +170,7 @@ export class Sim {
         this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
       }
     for (const m of f.messages) if (!m.preexisting) this.enqueue({ t: m.at, phase: PHASE.external, kind: 'message', msgId: m.id });
+    for (const r of f.restarts ?? []) this.enqueue({ t: r, phase: PHASE.external, kind: 'restart' });
     this.enqueue({ t: f.end, phase: PHASE.evaluator, kind: 'end' });
   }
 
@@ -277,6 +279,8 @@ export class Sim {
         return this.onCommit(ev.taskId!, ev.cause ?? null);
       case 'answer':
         return this.onAnswer(ev.taskId!, ev.ref!, ev.cause ?? null);
+      case 'restart':
+        return this.onRestart();
       case 'quiet':
         return this.onQuiet(ev.taskId!, ev.token!, ev.msgId!, ev.cause ?? null);
       case 'end':
@@ -605,7 +609,7 @@ export class Sim {
     }
     const oi = step.kind === 'op' ? opInfo(step) : null;
     const ramNeed = oi ? oi.ramGB : info.ramGB;
-    if (s.ram.usedGB + ramNeed > s.ram.totalGB + 1e-9) {
+    if (s.ram.usedGB + ramNeed > s.ram.totalGB + 1e-9 && !this.lab.noRamAdmission) {
       if (task.status !== 'WAITING_RESOURCE')
         this.trace({ kind: 'task', actor: 'relay', taskId: task.id, worker: wIdx, text: `${task.id} waits for RAM: needs ${ramNeed} GB, ${round1(s.ram.totalGB - s.ram.usedGB)} GB free.` });
       task.status = 'WAITING_RESOURCE';
@@ -615,6 +619,7 @@ export class Sim {
 
     this.charge(credits, `${task.id}: ${stepLabel(step)}`);
     s.ram.usedGB = round1(s.ram.usedGB + ramNeed);
+    const overcommitted = s.ram.usedGB > s.ram.totalGB + 1e-9;
     const pub = this.fixture.publication;
     const loseReply = step.kind === 'publish_live' && publishAllowed && !!pub?.loseFirstReply && s.world.publishRequests === 0;
     const dur = step.kind === 'publish_live' && !publishAllowed ? 0.5 * MIN : loseReply ? pub!.timeoutAfter : stepDuration(step, s.cores);
@@ -663,6 +668,8 @@ export class Sim {
     };
     task.status = 'RUNNING';
     task.waitLabel = '';
+    if (overcommitted) this.outOfMemory(wIdx);
+    if (!worker.active) return;
     if (cpuMin > 0) {
       // Local CPU work shares cores fairly; completion times are rescheduled as load changes.
       Object.assign(worker.active, { cpuWork: cpuMin * MIN, rate: 0, lastAt: s.time, ioMs: (oi?.ioMinutes ?? 0) * MIN });
@@ -1281,6 +1288,63 @@ export class Sim {
     }
   }
 
+  /** Failure Lab: memory overcommitted — the system kills the oldest running local job. */
+  private get lab(): LabFlags {
+    return { ...this.fixture.lab, ...this.state.build.lab };
+  }
+
+  private outOfMemory(newcomer: number) {
+    const s = this.state;
+    const victims = s.workers.filter((w) => w.active && w.idx !== newcomer && w.active.ramGB >= 0.5).sort((a, b) => a.active!.start - b.active!.start);
+    const v = victims[0] ?? s.workers.find((w) => w.idx === newcomer)!;
+    const a = v.active!;
+    const task = s.tasks.find((t) => t.id === a.taskId)!;
+    v.active = null;
+    s.ram.usedGB = round1(Math.max(0, s.ram.usedGB - a.ramGB));
+    task.status = 'FAILED';
+    task.waitLabel = 'Killed: out of memory';
+    if (task.run) task.runs.push({ ...task.run, finishedAt: s.time });
+    task.run = null;
+    this.trace({
+      kind: 'task',
+      actor: 'world',
+      taskId: task.id,
+      worker: v.idx,
+      text: `No memory admission (lab): ${round1(s.ram.usedGB + a.ramGB)} GB needed on a ${s.ram.totalGB} GB machine — out of memory! The system killed “${stepLabel(a.step)}”; its work is lost.`,
+    });
+    this.reflowCpu();
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
+  /** A worker restart: running computations are lost. The journal decides whether promises survive. */
+  private onRestart() {
+    const s = this.state;
+    const lost = s.workers.filter((w) => w.active);
+    for (const w of lost) {
+      const a = w.active!;
+      w.active = null;
+      s.ram.usedGB = round1(Math.max(0, s.ram.usedGB - a.ramGB));
+      this.trace({ kind: 'task', actor: 'world', worker: w.idx, taskId: a.taskId, text: `Worker ${w.idx + 1} restarted: unfinished “${stepLabel(a.step)}” is lost (its credits were already spent).` });
+    }
+    if (this.lab.noJournal) {
+      for (const t of s.tasks) {
+        if (t.status === 'DONE') continue;
+        t.status = 'CANCELLED';
+        t.waitLabel = 'Forgotten — there was no journal to remember it';
+        t.run = null;
+      }
+      for (const w of s.watchers) {
+        w.armed = false;
+        w.closedReason = 'Forgotten in the restart (no journal)';
+      }
+      this.trace({ kind: 'task', actor: 'world', text: 'No journal (lab): after the restart Relay has no record of its promises or watchers. It sits idle — nothing reminds it.' });
+      return;
+    }
+    for (const t of s.tasks) if (t.run && t.status === 'RUNNING') t.status = 'READY';
+    this.trace({ kind: 'task', actor: 'relay', text: 'Back from the restart: the journal still lists every promise, wait and step done — work resumes, redoing only the step that was interrupted.' });
+    this.enqueue({ t: s.time, phase: PHASE.runtime, kind: 'dispatch' });
+  }
+
   private nextWindow(who: string): Ms | null {
     const p = this.fixture.people?.[who];
     if (!p) return null;
@@ -1374,7 +1438,9 @@ export class Sim {
       case 'write': {
         const art = (s.world.artifacts[op.artifact] ??= { value: null, version: 0, writer: null, at: null, history: [] });
         const expected = n.readVersions?.[op.artifact];
-        if (op.expectVersion && expected != null && art.version !== expected) {
+        if (op.expectVersion && expected != null && art.version !== expected && this.lab.noVersionCheck)
+          tr(`No version check (lab): saving over version ${art.version} with work based on version ${expected} — the other change is silently lost.`, 'write');
+        else if (op.expectVersion && expected != null && art.version !== expected) {
           n.conflict = true;
           tr(`Write rejected: ${op.artifact} is at version ${art.version}, this work was based on version ${expected}. Nothing was overwritten.`, 'write');
           break;
@@ -1395,7 +1461,48 @@ export class Sim {
         const art = s.world.artifacts[op.artifact];
         const value = art?.value ?? n.output ?? null;
         s.world.sent.push({ artifact: op.artifact, to: op.to, at: s.time, value: value ? { ...value } : null });
-        tr(`${op.label}: sent to ${op.to}.`, 'write');
+        if (this.fixture.flakySend === op.artifact && s.world.sent.filter((x) => x.artifact === op.artifact).length === 1) {
+          n.unknownOutcome = true;
+          tr(`${op.label}: the message went out — but no reply came back. Did it arrive?`, 'task');
+        } else tr(`${op.label}: sent to ${op.to}.`, 'write');
+        break;
+      }
+      case 'resend': {
+        n.receipt = { version: 1, logoRev: 0, at: s.time };
+        if (!n.unknownOutcome) break;
+        if (this.lab.noDedupe) {
+          const art = s.world.artifacts[op.artifact];
+          s.world.sent.push({ artifact: op.artifact, to: op.to, at: s.time, value: art?.value ? { ...art.value } : null });
+          tr(`No duplicate check (lab): sent the message again — ${op.to} now has ${s.world.sent.filter((x) => x.artifact === op.artifact).length} copies.`, 'write');
+        } else {
+          s.blockedProposals++;
+          tr(`Runtime blocks a second send of the same message while the first is unresolved; a status check shows it was delivered.`, 'permission');
+        }
+        n.unknownOutcome = false;
+        break;
+      }
+      case 'publish': {
+        const target = String(n.output?.target ?? 'preview');
+        if (target === 'live' && this.fixture.delegation.live !== 'approval') {
+          if (!this.lab.noGate) {
+            s.blockedProposals++;
+            this.trace({ kind: 'permission', actor: 'relay', taskId: task.id, worker: wIdx, text: 'Permission gate blocks publishing to the live page: Maya didn’t allow it. Nothing changed.', cause });
+            break;
+          }
+          s.world.live = { version: s.world.live.version + 1, changedBy: s.build.agentName, logoRev: 1, approvedVersion: null, at: s.time };
+          s.violations.push('Changed the live page without permission');
+          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: 'No permission gate (lab): the live page was changed without permission. A hard violation.', cause });
+          n.receipt = { version: 1, logoRev: 0, at: s.time };
+          break;
+        }
+        const art = (s.world.artifacts.preview ??= { value: null, version: 0, writer: null, at: null, history: [] });
+        art.version++;
+        art.value = { logo: 'new logo' };
+        art.writer = `Worker ${wIdx + 1}`;
+        art.at = s.time;
+        art.history.push({ version: art.version, at: s.time, writer: art.writer, value: art.value });
+        n.receipt = { version: art.version, logoRev: 0, at: s.time };
+        tr(`${op.label}: the preview page now shows the logo.`, 'write');
         break;
       }
       case 'verify': {

@@ -37,7 +37,7 @@ export const op = {
   cancel: (job: string, label: string): StepDef => ({ kind: 'op', op: { type: 'cancel', job, label } }),
   notify: (who: string, text: string, label: string): StepDef => ({ kind: 'op', op: { type: 'notify', who, text, label } }),
 };
-const when = (w: 'need' | 'ok' | 'conflict', st: StepDef): StepDef => ({ ...st, when: w });
+export const when = (w: 'need' | 'ok' | 'conflict', st: StepDef): StepDef => ({ ...st, when: w });
 
 const worker = (jobs: string[], procedures: Record<string, StepDef[]>): WorkerCfg => ({
   card: 'worker',
@@ -64,7 +64,7 @@ export function jobsBuild(
   };
 }
 
-function fixture(f: Partial<Fixture> & Pick<Fixture, 'id' | 'title' | 'jobs' | 'messages'>): Fixture {
+export function fixture(f: Partial<Fixture> & Pick<Fixture, 'id' | 'title' | 'jobs' | 'messages'>): Fixture {
   return {
     ...OPENING,
     goal: 'jobs',
@@ -78,7 +78,7 @@ function fixture(f: Partial<Fixture> & Pick<Fixture, 'id' | 'title' | 'jobs' | '
   };
 }
 
-const briefMsg = (body: string, extra: Partial<Fixture['messages'][number]> = {}) => ({
+export const briefMsg = (body: string, extra: Partial<Fixture['messages'][number]> = {}) => ({
   id: 'm-maya-brief',
   from: 'maya' as const,
   at: at(17, 58),
@@ -89,7 +89,7 @@ const briefMsg = (body: string, extra: Partial<Fixture['messages'][number]> = {}
 });
 
 const lastSent = (s: SimState, artifact: string) => [...s.world.sent].reverse().find((x) => x.artifact === artifact);
-const sentAll = (s: SimState, artifact: string) => s.world.sent.filter((x) => x.artifact === artifact);
+export const sentAll = (s: SimState, artifact: string) => s.world.sent.filter((x) => x.artifact === artifact);
 
 /** Medal: the required work done right (and no hard violations, within budget). */
 const coreMedal = (label: string, hint: string): Medal => ({
@@ -127,7 +127,7 @@ const byMedal = (by: Ms, label: string, hint: string): Medal => ({
   measure: (o) => ({ you: o.firstVerifiedAt != null ? `done ${fmtTime(o.firstVerifiedAt)}` : 'not done', goal: `by ${fmtTime(by)}` }),
 });
 
-const choice = (id: string, title: string, prompt: string, options: Choice['options'], showIf?: Choice['showIf']): Choice => ({ id, title, prompt, options, showIf });
+export const choice = (id: string, title: string, prompt: string, options: Choice['options'], showIf?: Choice['showIf']): Choice => ({ id, title, prompt, options, showIf });
 
 const MODEL_CHOICE = choice('model', 'AI model', 'Which AI model makes the decisions?', [
   { id: 'swift', label: '⚡ Quick', desc: 'Small, fast model. Tray holds 10 units.', cost: '1 min · 1 credit per decision' },
@@ -470,9 +470,9 @@ CONCEPTS.push({
   ],
 });
 
-const logoTiles = (times: Ms[]): TileDef[] =>
+export const logoTiles = (times: Ms[]): TileDef[] =>
   times.map((t, i) => ({ id: `rev-${i + 1}`, label: `Logo revision ${i + 1}`, units: 1, source: 'logos', at: t, subject: 'logo', kind: 'input', data: { rev: i + 1 } }));
-const logoMsgs = (times: Ms[]): Fixture['messages'] =>
+export const logoMsgs = (times: Ms[]): Fixture['messages'] =>
   times.map((t, i) => ({ id: `m-rev-${i + 1}`, from: 'isha' as const, at: t, subject: `Logo v${i + 1}`, body: i ? 'Tiny tweak — here’s another version.' : 'First version of the logo.', kind: 'logo_rev' }));
 
 registerRule('latest_logo', (_p, tiles) => {
@@ -482,12 +482,12 @@ registerRule('latest_logo', (_p, tiles) => {
   return { output: { rev }, explanation: `The newest logo on the tray is revision ${rev}. Render it.` };
 });
 
-const previewCheck = (finalRev: number) => (s: SimState) => {
+export const previewCheck = (finalRev: number) => (s: SimState) => {
   const v = s.world.artifacts.preview?.value?.rev;
   return v === finalRev ? { ok: true, status: 'done' } : { ok: false, status: v ? `shows revision ${v} of ${finalRev}` : 'no preview' };
 };
 
-const previewProc = (notify: boolean): StepDef[] => [
+export const previewProc = (notify: boolean): StepDef[] => [
   op.read('logos', 'Fetch the latest logos'),
   op.decide('latest_logo', 'Pick the newest revision', 'Keep the preview on the newest logo', 'swift', 'all'),
   op.local('Render the preview', 3, 1, 1),
@@ -745,7 +745,7 @@ const pageHas = (field: 'logo' | 'pricing') => (s: SimState) => {
 
 // ---- Mission 15: Two hands, one file ---------------------------------------
 
-const M15_FIX = fixture({
+export const M15_FIX = fixture({
   id: 'm15-two-hands',
   title: 'Two hands, one file',
   end: at(18, 30),
@@ -759,7 +759,7 @@ const M15_FIX = fixture({
   ],
 });
 
-function twoHandsBuild(b: Build, p: Record<string, string>): Build {
+export function twoHandsBuild(b: Build, p: Record<string, string>): Build {
   const mode = p.share ?? 'merge';
   const edit = (rule: string, label: string, cpu: number, ram: number): StepDef[] => {
     if (mode === 'merge')
@@ -850,7 +850,7 @@ interface Format {
   cpu: number;
   credits: number;
 }
-const FORMATS: Format[] = [
+export const FORMATS: Format[] = [
   { id: 'social', title: 'Social image', icon: '🖼️', kind: 'render', cpu: 4, credits: 2 },
   { id: 'banner', title: 'Web banner', icon: '🏳️', kind: 'render', cpu: 3, credits: 1 },
   { id: 'onepager', title: 'One-page PDF', icon: '📄', kind: 'browser', cpu: 1, credits: 1 },
@@ -860,7 +860,7 @@ const FORMATS: Format[] = [
 const formatTiles = (): TileDef[] =>
   FORMATS.map((f) => ({ id: `fmt-${f.id}`, label: `${f.title} spec`, units: 1, source: `fmt_${f.id}`, at: 0, kind: 'doc', data: { format: f.title } }));
 
-function workshopFixture(id: string, title: string, required: string[], dueAt: Ms): Fixture {
+export function workshopFixture(id: string, title: string, required: string[], dueAt: Ms): Fixture {
   return fixture({
     id,
     title,
@@ -900,7 +900,7 @@ function formatProc(f: Format, quality: 'high' | 'standard'): StepDef[] {
   ];
 }
 
-function workshopBuild(b: Build, p: Record<string, string>, take: string[]): Build {
+export function workshopBuild(b: Build, p: Record<string, string>, take: string[]): Build {
   const machine = (p.machine ?? 'team') as MachineId;
   const quality = (p.quality ?? 'standard') as 'high' | 'standard';
   const order = (p.order ?? 'big') === 'big' ? ['social', 'banner', 'onepager', 'press'] : ['onepager', 'press', 'banner', 'social'];

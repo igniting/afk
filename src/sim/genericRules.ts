@@ -76,6 +76,12 @@ export const SELECT: Record<string, (tiles: TileDef[]) => Picked> = {
     return { chosen, skipped };
   },
 
+  /** Failure Lab: everything except the constraints — as if they were never packed. */
+  noConstraint: (tiles) => ({
+    chosen: tiles.filter((t) => t.kind !== 'note' || t.subject !== 'constraint').sort(newestFirst),
+    skipped: tiles.filter((t) => t.kind === 'note' && t.subject === 'constraint').map((tile) => ({ tile, reason: 'Left off the tray (lab: constraint omitted)' })),
+  }),
+
   /** Every installed skill, in installation order (alphabetical), then the rest. */
   allSkills: (tiles) => {
     const skills = tiles.filter((t) => t.kind === 'skill').sort((a, b) => a.id.localeCompare(b.id));

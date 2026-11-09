@@ -29,6 +29,8 @@ export interface SaveData {
   predictions?: { right: number; total: number };
   /** Recent runs per mission, for honest same-conditions comparison. */
   missionRuns?: Record<string, MissionRun[]>;
+  /** Failure Labs: which versions ('on' / 'off') the player has run. */
+  labs?: Record<string, string[]>;
 }
 
 export interface MissionRun {

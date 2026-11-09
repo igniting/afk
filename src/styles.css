@@ -405,3 +405,10 @@ code { font-size: 13px; background: #0e182c; padding: 1px 5px; border-radius: 4p
 .setup-note { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
 li.superseded { text-decoration: line-through; opacity: .6; }
 .guide h2.prompt { font-size: 18px; line-height: 1.35; font-weight: 600; }
+
+/* Failure Labs */
+.mission-card.lab { border-style: dashed; }
+.lab-dots .dot { filter: grayscale(1); opacity: .35; font-size: 15px; }
+.lab-dots .dot.got { filter: none; opacity: 1; }
+.lab-trace { list-style: none; padding: 0; margin: 6px 0 0; font-size: 13px; display: grid; gap: 4px; }
+.lab-trace .muted { display: inline-block; min-width: 44px; }

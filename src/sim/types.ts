@@ -157,7 +157,9 @@ export type OpSpec =
   | { type: 'waitJob'; job: string; label: string }
   | { type: 'waitEvent'; event: string; label: string }
   | { type: 'cancel'; job: string; label: string }
-  | { type: 'notify'; who: string; label: string; text: string };
+  | { type: 'notify'; who: string; label: string; text: string }
+  | { type: 'publish'; label: string }
+  | { type: 'resend'; artifact: string; to: string; label: string };
 
 export interface JobDef {
   id: string;
@@ -200,6 +202,14 @@ export interface WorkerCfg {
 
 export type GuideChoice = 'none' | 'full' | 'summary';
 
+export interface LabFlags {
+  noJournal?: boolean;
+  noGate?: boolean;
+  noDedupe?: boolean;
+  noRamAdmission?: boolean;
+  noVersionCheck?: boolean;
+}
+
 export interface Build {
   name: string;
   agentName: string;
@@ -213,6 +223,8 @@ export interface Build {
   triggers?: Record<string, string[]>;
   /** Mid-shift opportunities: precommitted (Away-mode) admission rule. */
   admission?: 'decline' | 'fits' | 'always';
+  /** Failure Labs only: protections deliberately removed for a disposable experiment. */
+  lab?: LabFlags;
   watchers: (WatcherCfg | null)[];
   workers: (WorkerCfg | null)[];
 }
@@ -260,6 +272,12 @@ export interface Fixture {
   people?: Record<string, { windows: [Ms, Ms][]; replyAfter: Ms }>;
   /** Artifacts that already exist at the start (e.g. a page two workers will edit). */
   artifacts?: Record<string, Record<string, string | number | boolean | null>>;
+  /** Failure Labs only: protections deliberately removed in a disposable experiment. */
+  lab?: LabFlags;
+  /** Simulated worker restarts (e.g. a crash or redeploy). */
+  restarts?: Ms[];
+  /** The first send of this artifact goes out, but its reply is lost. */
+  flakySend?: string;
   /** Uncertain publication: the first publish commits but its reply is lost. */
   publication?: { loseFirstReply: boolean; commitAfter: Ms; timeoutAfter: Ms };
   /** Feedback workload (default 9 complete + 3 incomplete threads). */
@@ -497,7 +515,7 @@ export interface QueuedEvent {
   t: Ms;
   phase: number;
   seq: number;
-  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'approval' | 'commit' | 'answer' | 'quiet' | 'end';
+  kind: 'message' | 'deliver' | 'watcher_sync' | 'step_done' | 'dispatch' | 'reaction' | 'approval' | 'commit' | 'answer' | 'quiet' | 'restart' | 'end';
   taskId?: string;
   token?: number;
   /** Which answer/approval a reply carries. */

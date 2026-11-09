@@ -7,6 +7,7 @@ import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type Fixture, 
 import { TEMPLATES, emptyBuild, setGuide } from '../content/opening';
 import { CONCEPTS, COMING_SOON, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
 import { MISSIONS } from '../content/campaign';
+import { LABS, type Lab } from '../content/labs';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
@@ -258,7 +259,7 @@ export class App {
     const isha = this.fx.availability.isha;
     const ends = this.fx.end;
     if (!this.advanced) {
-      setHtml(m, `<span class="meter">Mission ${this.mission.n}: ${esc(this.mission.goal)}</span>`);
+      setHtml(m, `<span class="meter">${this.lab ? '🧪 Lab' : `Mission ${this.mission.n}`}: ${esc(this.mission.goal)}</span>`);
       return;
     }
     setHtml(m, `
@@ -661,7 +662,7 @@ export class App {
             ? flow
             : `<ol class="flow compact"><li>📡 Notice it (${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>`
         }
-        ${goals ? `<div class="estimate"><b>Medal check</b> <span class="muted small">(estimate, if the job succeeds)</span><ul>${goals}</ul></div>` : ''}
+        ${goals ? `<div class="estimate"><b>${this.lab ? 'Budget check' : 'Medal check'}</b> <span class="muted small">(estimate, if the job succeeds)</span><ul>${goals}</ul></div>` : ''}
         <div class="predict">
           <h2>🔮 Your prediction</h2>
           <p>${esc(pr.question)}</p>
@@ -674,7 +675,7 @@ export class App {
     }
     return `
       ${this.mission.choices && current !== 'predict' && current !== 'ready' ? `<p class="small muted setup-note">${name} is already set up from earlier shifts. This mission is about these choices.</p>` : ''}
-      <div class="mission-head"><span class="kicker">Mission ${this.mission.n} · ${esc(this.mission.title)}</span>
+      <div class="mission-head"><span class="kicker">${this.lab ? '🧪 Failure Lab' : `Mission ${this.mission.n}`} · ${esc(this.mission.title)}</span>
         <button class="btn small ghost" data-action="map">Missions</button></div>
       <ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
   }
@@ -1334,6 +1335,11 @@ export class App {
     this.bump();
   }
 
+  /** The current mission, when it is a Failure Lab. */
+  private get lab(): Lab | null {
+    return 'lab' in this.mission ? (this.mission as Lab) : null;
+  }
+
   private progress(id: string) {
     return this.save.missions?.[id] ?? { medals: [] as string[], completed: false };
   }
@@ -1378,6 +1384,17 @@ export class App {
     const soon = COMING_SOON.map(
       (c) => `<div class="mission-card locked"><span class="mnum">🔒</span><span class="mbody"><b>${esc(c.title)}</b><span class="muted small">Coming soon</span></span></div>`,
     ).join('');
+    const labCards = LABS.map((l) => {
+      const after = MISSIONS.find((m) => m.id === l.lab.after)!;
+      const open = this.progress(after.id).completed;
+      const tried = this.save.labs?.[l.id] ?? [];
+      const status = !open ? `Opens after mission ${after.n}` : tried.length >= 2 ? '✓ Both versions run' : tried.length ? 'Now run the other version' : `Removes ${l.lab.removes}`;
+      return `<button class="mission-card lab ${open ? '' : 'locked'} ${tried.length >= 2 ? 'complete' : ''}" ${open ? `data-action="mission" data-arg="${l.id}"` : 'disabled'}>
+        <span class="mnum">${open ? '🧪' : '🔒'}</span>
+        <span class="mbody"><b>${esc(l.title)}</b><span class="muted small">${esc(status)}</span></span>
+        <span class="medals lab-dots" aria-label="${tried.length} of 2 versions run">${['on', 'off'].map((v) => `<span class="dot ${tried.includes(v) ? 'got' : ''}" title="${v === 'on' ? esc(l.lab.on) : esc(l.lab.off)}">${v === 'on' ? '🛡️' : '🧪'}</span>`).join('')}</span>
+      </button>`;
+    }).join('');
     const guide = CONCEPTS.map((c) => {
       const has = learned.has(c.id);
       return `<li class="concept ${has ? 'got' : ''}"><span class="cicon">${has ? c.icon : '?'}</span><span><b>${has ? esc(c.title) : 'Locked'}</b><span class="muted small">${has ? esc(c.short) : 'Finish a mission to unlock'}</span></span></li>`;
@@ -1386,6 +1403,8 @@ export class App {
       <div class="map">
         <div class="map-head"><h2>Missions</h2><span class="score">🏅 ${got}/${total} medals${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
         <div class="missions">${cards}${soon}</div>
+        <h3 class="fg-title">🧪 Failure Labs <span class="muted small">Disposable experiments: remove one protection and watch what it was doing. No medals, nothing saved to your missions.</span></h3>
+        <div class="missions">${labCards}</div>
         <h3 class="fg-title">📓 Field guide <span class="muted small">${learned.size}/${CONCEPTS.length} concepts</span></h3>
         <ul class="field-guide">${guide}</ul>
       </div>`);
@@ -1393,7 +1412,7 @@ export class App {
   }
 
   private startMission(id: string) {
-    this.mission = MISSIONS.find((m) => m.id === id) ?? MISSIONS[0];
+    this.mission = [...MISSIONS, ...LABS].find((m) => m.id === id) ?? MISSIONS[0];
     $('toasts').innerHTML = '';
     this.build = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
     this.guideDone.clear();
@@ -1445,6 +1464,7 @@ export class App {
     this.mode = 'brief';
     const m = this.mission;
     const brief = this.fx.messages.find((x) => x.id === 'm-maya-brief')!;
+    if (this.lab) return this.showLabBrief(brief.body);
     const p = this.progress(m.id);
     const medals = m.medals
       .map((md) => `<li class="${p.medals.includes(md.id) ? 'got' : ''}"><span class="medal ${p.medals.includes(md.id) ? 'got' : ''}">${md.icon}</span>${esc(md.label)}</li>`)
@@ -1464,7 +1484,101 @@ export class App {
     this.bump();
   }
 
+  private showLabBrief(body: string) {
+    const l = this.lab!;
+    this.overlay(`
+      <div class="brief">
+        <p class="kicker">🧪 Failure Lab · ${esc(l.title)}</p>
+        <p class="challenge">A disposable experiment. Run it twice: once with <b>${esc(l.lab.on)}</b>, once with <b>${esc(l.lab.off)}</b>. Nothing here changes your missions or saved builds.</p>
+        <div class="msg big">
+          <span class="avatar" style="--c:${PEOPLE.maya.color}" aria-hidden="true">M</span>
+          <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(body)}</p></div>
+        </div>
+        <div class="row center"><button class="btn primary big" data-action="begin-build">Set up the experiment</button><button class="btn ghost" data-action="map">Back</button></div>
+      </div>`);
+    this.bump();
+  }
+
+  private showLabDebrief() {
+    const sim = this.sim!;
+    const s = sim.state;
+    const l = this.lab!;
+    this.debriefShown = true;
+    this.playing = false;
+    const o = evaluateOpening(s, this.fx.deadlines, this.fx);
+    const version = this.picks[l.lab.toggle] ?? l.choices![0].options[0].id;
+    const removed = version !== 'on';
+    const versionLabel = l.choices![0].options.find((x) => x.id === version)?.label ?? version;
+    const tried = new Set([...(this.save.labs?.[l.id] ?? []), removed ? 'off' : 'on']);
+    this.save.labs = { ...(this.save.labs ?? {}), [l.id]: [...tried] };
+    const conceptNew = !(this.save.concepts ?? []).includes(l.concept);
+    this.save.concepts = [...new Set([...(this.save.concepts ?? []), l.concept])];
+    const correct = l.prediction.answer(s, null);
+    const predictedRight = this.predicted === correct;
+    const pr = this.save.predictions ?? { right: 0, total: 0 };
+    if (this.predicted) this.save.predictions = { right: pr.right + (predictedRight ? 1 : 0), total: pr.total + 1 };
+    const previous = [...(this.save.missionRuns?.[l.id] ?? [])];
+    const thisRun: MissionRun = { at: new Date().toISOString(), plan: versionLabel.replace(/^\S+\s/, ''), medals: [], credits: o.creditsSpent, doneAt: this.doneTime(s, o), ok: o.promiseKept };
+    this.save.missionRuns = { ...(this.save.missionRuns ?? {}), [l.id]: [...previous, thisRun].slice(-10) };
+    this.persist();
+
+    const jobDefs = this.fx.jobs ?? [];
+    const jobsTable = `<table class="jobs"><thead><tr><th>Job</th><th>Result</th></tr></thead><tbody>${o.jobs
+      .map((j) => {
+        const d = jobDefs.find((x) => x.id === j.id)!;
+        return `<tr class="${j.ok ? 'ok' : 'no'}"><td>${d.icon} ${esc(d.title)}</td><td>${j.ok ? `done ${fmtTime(j.doneAt!)}` : esc(j.status)}</td></tr>`;
+      })
+      .join('')}</tbody></table>`;
+    const headline = !removed
+      ? o.promiseKept
+        ? 'With the protection on, the job got done.'
+        : 'The protection held: nothing bad happened, but the job wasn’t done.'
+      : o.promiseKept
+        ? 'You got lucky this time.'
+        : s.violations.length
+          ? 'Without the protection, a mistake went out into the world.'
+          : 'Without the protection, the job went wrong.';
+    const chosen = l.prediction.options.find((x) => x.id === this.predicted)?.label ?? '—';
+    const keyLines = s.trace
+      .filter((e) => /\(lab\)|restarted|Back from the restart|Runtime blocks|Permission gate blocks|waits for RAM|Write rejected|no reply came back/.test(e.text))
+      .slice(0, 5)
+      .map((e) => `<li><span class="muted">${fmtTime(e.t)}</span> ${esc(e.text)}</li>`)
+      .join('');
+    const other = removed ? 'on' : 'off';
+    const rows = [...previous.slice(-4), thisRun]
+      .map((r) => `<tr class="${r === thisRun ? 'current' : ''}"><td>${r === thisRun ? '▶ ' : ''}${esc(r.plan)}</td><td>${r.ok ? '✓ done' : '✗ failed'}</td><td>${r.credits}</td><td>${r.doneAt != null ? fmtTime(r.doneAt) : '—'}</td></tr>`)
+      .join('');
+    this.overlay(`
+      <div class="debrief lab-debrief">
+        <p class="kicker">🧪 Failure Lab · ${esc(l.title)} · ${esc(versionLabel)}</p>
+        <h2>${headline}</h2>
+        ${jobsTable}
+        ${keyLines ? `<div class="why"><h3>What happened</h3><ul class="lab-trace">${keyLines}</ul></div>` : ''}
+        ${
+          this.predicted
+            ? `<div class="prediction-result ${predictedRight ? 'right' : 'wrong'}"><p><b>🔮 ${predictedRight ? 'You predicted it!' : 'Not what you predicted.'}</b> You said: “${esc(chosen)}”</p><p>${esc(l.prediction.explain(s))}</p></div>`
+            : `<div class="prediction-result"><p>${esc(l.prediction.explain(s))}</p></div>`
+        }
+        ${previous.length ? `<div class="compare-runs"><h3>Your runs of this lab</h3><p class="small muted">Same evening every time — only the protection changed.</p><table><thead><tr><th>Version</th><th>Result</th><th>Credits</th><th>Done</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+        <div class="concept-card ${conceptNew ? 'new' : ''}">
+          <div class="cc-head"><span class="cicon">🛡️</span><div><span class="kicker">What ${esc(l.lab.removes)} protects against</span><h3>${esc(l.title)}</h3></div></div>
+          <ul>${l.lab.lesson.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>
+          ${conceptNew ? '<p class="small">🧪 New in your field guide: <b>Why the safety rails exist</b>.</p>' : ''}
+        </div>
+        <div class="choices">
+          ${
+            tried.size < 2
+              ? `<button class="btn choice primary-choice" data-action="lab-flip" data-arg="${other}"><b>${other === 'off' ? '🧪 Now remove the protection' : '🛡️ Now run it with the protection'} →</b><span>Same evening, other version.</span></button>`
+              : `<button class="btn choice" data-action="lab-flip" data-arg="${other}"><b>↺ Run the other version again</b><span>${esc(other === 'off' ? l.lab.off : l.lab.on)}</span></button>`
+          }
+          <button class="btn choice ${tried.size >= 2 ? 'primary-choice' : ''}" data-action="map"><b>Missions</b><span>Back to the map.</span></button>
+        </div>
+      </div>`);
+    this.bump();
+  }
+
   private showDebrief() {
+    if (this.lab) return this.showLabDebrief();
     const sim = this.sim!;
     this.debriefShown = true;
     this.playing = false;
@@ -2065,6 +2179,16 @@ export class App {
         return this.bump();
       case 'map':
         return this.showMap();
+      case 'lab-flip': {
+        const l = this.lab;
+        if (!l) return;
+        const opts = l.choices![0].options.map((x) => x.id);
+        this.picks = { ...this.picks, [l.lab.toggle]: arg === 'on' ? 'on' : opts[opts.length - 1] };
+        this.predicted = null;
+        this.markAllGuided();
+        this.applyChoices();
+        return this.toBuild();
+      }
       case 'mission':
         return this.startMission(arg!);
       case 'next-mission': {
