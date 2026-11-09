@@ -1,7 +1,7 @@
 // Missions: short, replayable lessons built on the same simulation. Each teaches one concept,
 // asks the player to predict an outcome before running, and awards medals for real tradeoffs
 // (getting the job done, spending less, finishing sooner, needing no help).
-import { at, type Fixture, type SimState } from '../sim/types';
+import { at, fmtTime, type Fixture, type Ms, type SimState } from '../sim/types';
 import type { OpeningOutcome } from '../sim/evaluate';
 import { OPENING } from './opening';
 
@@ -67,8 +67,53 @@ export interface Medal {
   icon: string;
   label: string;
   hint: string;
+  /** Numeric target, so the UI can compare an estimate or a result against it. */
+  goal?: { credits?: number; by?: Ms };
   test(o: OpeningOutcome, s: SimState): boolean;
+  /** What the player achieved vs. what the medal needed, in plain words. */
+  measure(o: OpeningOutcome, s: SimState): { you: string; goal: string };
 }
+
+const jobState = (o: OpeningOutcome) =>
+  o.promiseKept ? 'done' : o.previewRev && !o.taglineOk ? 'tagline missing' : o.previewRev && o.previewRev < o.latestSent ? 'old logo on the page' : o.previewRev ? 'not finished' : 'no logo on the page';
+
+const doneMedal = (label: string, hint: string): Medal => ({
+  id: 'done',
+  icon: '🏁',
+  label,
+  hint,
+  test: (o) => o.promiseKept,
+  measure: (o) => ({ you: jobState(o), goal: 'job done' }),
+});
+const cheapMedal = (limit: number, hint: string): Medal => ({
+  id: 'cheap',
+  icon: '💰',
+  label: `Spend ${limit} credits or less`,
+  hint,
+  goal: { credits: limit },
+  test: (o) => o.promiseKept && o.creditsSpent <= limit,
+  measure: (o) => ({ you: o.promiseKept ? `${o.creditsSpent} credits` : `job not done (${o.creditsSpent} credits)`, goal: `≤ ${limit} credits` }),
+});
+const fastMedal = (by: Ms, hint: string): Medal => ({
+  id: 'fast',
+  icon: '⚡',
+  label: `Checked by ${fmtTime(by)}`,
+  hint,
+  goal: { by },
+  test: (o) => o.promiseKept && (o.firstVerifiedAt ?? Infinity) <= by,
+  measure: (o) => ({
+    you: !o.promiseKept ? 'job not done' : o.firstVerifiedAt != null ? `checked at ${fmtTime(o.firstVerifiedAt)}` : 'never checked',
+    goal: `by ${fmtTime(by)}`,
+  }),
+});
+const autoMedal = (hint: string): Medal => ({
+  id: 'auto',
+  icon: '🤖',
+  label: 'No help from you',
+  hint,
+  test: (o) => o.autonomous,
+  measure: (o) => ({ you: o.interventions ? `you stepped in ${o.interventions}×` : o.promiseKept ? 'no help needed' : 'job not done', goal: 'job done, 0 help' }),
+});
 
 export interface Prediction {
   question: string;
@@ -130,9 +175,9 @@ export const MISSIONS: Mission[] = [
         `The AI model ran for only ${decideMinutes(s)} minute${decideMinutes(s) === 1 ? '' : 's'} all evening. The watcher did the waiting; the AI was used only when there was something to decide.`,
     },
     medals: [
-      { id: 'done', icon: '🏁', label: 'Logo on the preview', hint: 'Finish the build and run it.', test: (o) => o.promiseKept },
-      { id: 'fast', icon: '⚡', label: 'Checked by 18:09', hint: 'A smaller AI model decides faster.', test: (o) => o.promiseKept && (o.firstVerifiedAt ?? Infinity) <= at(18, 9) },
-      { id: 'cheap', icon: '💰', label: 'Spend 11 credits or less', hint: 'A smaller AI model costs less per decision.', test: (o) => o.promiseKept && o.creditsSpent <= 11 },
+      doneMedal('Logo on the preview', 'Finish the build and run it.'),
+      fastMedal(at(18, 9), 'A smaller AI model decides faster.'),
+      cheapMedal(11, 'A smaller AI model costs less per decision.'),
     ],
   },
   {
@@ -166,9 +211,9 @@ export const MISSIONS: Mission[] = [
           : 'A watcher set to “check once” switches off after the first email. The correction reached the inbox, but nobody told the agent.',
     },
     medals: [
-      { id: 'done', icon: '🏁', label: 'Latest logo on the preview', hint: 'The preview must show Isha’s correction.', test: (o) => o.promiseKept },
-      { id: 'auto', icon: '🤖', label: 'No help from you', hint: 'Set the watcher before you run, so you never need to step in.', test: (o) => o.autonomous },
-      { id: 'cheap', icon: '💰', label: 'Spend 14 credits or less', hint: 'Two logos means two decisions — the small model is cheaper.', test: (o) => o.promiseKept && o.creditsSpent <= 14 },
+      doneMedal('Latest logo on the preview', 'The preview must show Isha’s correction.'),
+      autoMedal('Set the watcher before you run, so you never need to step in.'),
+      cheapMedal(14, 'Two logos means two decisions — the small model is cheaper.'),
     ],
   },
   {
@@ -209,9 +254,9 @@ export const MISSIONS: Mission[] = [
       },
     },
     medals: [
-      { id: 'done', icon: '🏁', label: 'Logo + tagline on the preview', hint: 'The AI can’t use what doesn’t reach its tray.', test: (o) => o.promiseKept },
-      { id: 'cheap', icon: '💰', label: 'Spend 11 credits or less', hint: 'A short summary fits on a small tray.', test: (o) => o.promiseKept && o.creditsSpent <= 11 },
-      { id: 'fast', icon: '⚡', label: 'Checked by 18:09', hint: 'Small model + small file = quick.', test: (o) => o.promiseKept && (o.firstVerifiedAt ?? Infinity) <= at(18, 9) },
+      doneMedal('Logo + tagline on the preview', 'The AI can’t use what doesn’t reach its tray.'),
+      cheapMedal(11, 'The Quick model is cheaper — and the 2-unit summary fits its smaller tray.'),
+      fastMedal(at(18, 9), 'The Quick model decides in 1 min instead of 3.'),
     ],
   },
 ];

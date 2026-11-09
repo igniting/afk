@@ -422,12 +422,23 @@ export class App {
       };
       const flow = k!.procedure.map((st) => `<li>${icons[st.kind]} ${plain[st.kind]}</li>`).join('');
       const pr = this.mission.prediction;
+      const est = this.estimate();
+      const goals = this.mission.medals
+        .filter((md) => md.goal)
+        .map((md) => {
+          const g = md.goal!;
+          const ok = g.credits != null ? est.credits <= g.credits : est.checkedAt <= g.by!;
+          const val = g.credits != null ? `≈${est.credits} credits` : `≈${fmtTime(est.checkedAt)}`;
+          return `<li class="${ok ? 'ok' : 'no'}">${md.icon} ${esc(md.label)} <span>${ok ? '✓' : '✗'} estimate ${val}</span></li>`;
+        })
+        .join('');
       const opts = pr.options
         .map((o) => `<button class="btn choice ${this.predicted === o.id ? 'on' : ''}" data-action="predict" data-arg="${o.id}" aria-pressed="${this.predicted === o.id}">${esc(o.label)}</button>`)
         .join('');
       body = `
         <p class="muted small">When Isha’s email arrives, ${name} will:</p>
         <ol class="flow compact"><li>📡 Notice it (${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>
+        ${goals ? `<div class="estimate"><b>Medal check</b> <span class="muted small">(estimate, if the job succeeds)</span><ul>${goals}</ul></div>` : ''}
         <div class="predict">
           <h2>🔮 Your prediction</h2>
           <p>${esc(pr.question)}</p>
@@ -440,6 +451,19 @@ export class App {
       <div class="mission-head"><span class="kicker">Mission ${this.mission.n} · ${esc(this.mission.title)}</span>
         <button class="btn small ghost" data-action="map">Missions</button></div>
       <ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
+  }
+
+  /** Pre-run forecast from declared step costs (no hidden information). */
+  private estimate(): { credits: number; checkedAt: number } {
+    const k = this.build.workers[0];
+    const cores = MACHINES[this.build.machine].cores;
+    const f = k ? forecastProcedure(k.procedure, cores) : { minutes: 0, credits: 0 };
+    const logos = this.fx.messages.filter((m) => m.attachment && !m.preexisting);
+    const handled = this.build.watchers[0]?.wake === 'keep' ? logos.length : 1;
+    return {
+      credits: MACHINES[this.build.machine].rent + f.credits * handled,
+      checkedAt: (logos[0]?.at ?? this.fx.start) + f.minutes * MIN,
+    };
   }
 
   private guideStepHtml(): string {
@@ -1038,8 +1062,11 @@ export class App {
       .map((md) => {
         const got = earned.includes(md);
         const isNew = got && !before.medals.includes(md.id);
-        return `<li class="${got ? 'got' : ''}"><span class="medal big ${got ? 'got' : ''} ${isNew ? 'new' : ''}">${md.icon}</span>
-          <span><b>${esc(md.label)}</b>${isNew ? ' <span class="pill good">new</span>' : ''}${got ? '' : `<span class="muted small block">${esc(md.hint)}</span>`}</span></li>`;
+        const ms = md.measure(o, s);
+        return `<li class="${got ? 'got' : 'missed'}"><span class="medal big ${got ? 'got' : ''} ${isNew ? 'new' : ''}">${md.icon}</span>
+          <span class="mtext"><b>${esc(md.label)}</b>${isNew ? ' <span class="pill good">new</span>' : ''}
+            ${got ? '' : `<span class="small block hint">💡 ${esc(md.hint)}</span>`}</span>
+          <span class="vs ${got ? 'ok' : 'no'}"><span>${got ? '✓' : '✗'} ${esc(ms.you)}</span>${got ? '' : `<span class="muted">goal: ${esc(ms.goal)}</span>`}</span></li>`;
       })
       .join('');
     const chosen = m.prediction.options.find((x) => x.id === this.predicted)?.label ?? '—';
@@ -1062,6 +1089,7 @@ export class App {
         </div>
         <h2>${headline}</h2>
         <ul class="medal-results">${medalRow}</ul>
+        ${this.whyHtml(s, o, m.medals.filter((md) => !earned.includes(md)).map((md) => md.id))}
         ${
           this.predicted
             ? `<div class="prediction-result ${predictedRight ? 'right' : 'wrong'}">
@@ -1087,6 +1115,63 @@ export class App {
         </div>
       </div>`);
     this.bump();
+  }
+
+  /** Explains missed cost/speed medals with the run's own numbers — no guessing. */
+  private whyHtml(s: Sim['state'], o: OpeningOutcome, missed: string[]): string {
+    if (!o.promiseKept || !(missed.includes('cheap') || missed.includes('fast'))) return '';
+    const friendly = (what: string) => {
+      const w = what.replace(/^T\d+: /, '');
+      if (/rent/.test(w)) return 'Machine rent (every run)';
+      if (/Decide · Deliberate/.test(w)) return 'AI decision — Thorough';
+      if (/Decide · Swift/.test(w)) return 'AI decision — Quick';
+      if (/Render/.test(w)) return 'Prepare the logo';
+      if (/Save/.test(w)) return 'Save to the preview';
+      return w;
+    };
+    const groups = new Map<string, { n: number; total: number }>();
+    for (const l of s.credits.ledger) {
+      const k = friendly(l.what);
+      const g = groups.get(k) ?? { n: 0, total: 0 };
+      g.n++;
+      g.total += l.amount;
+      groups.set(k, g);
+    }
+    const credits = [...groups.entries()]
+      .map(([k, g]) => `<tr class="${/Thorough/.test(k) ? 'hot' : ''}"><td>${esc(k)}${g.n > 1 ? ` × ${g.n}` : ''}</td><td>${g.total}</td></tr>`)
+      .join('');
+
+    const run = s.tasks[0]?.runs.find((r) => r.notes.receipt);
+    let times = '';
+    if (run) {
+      const starts = s.trace.filter((e) => e.kind === 'step_start' && e.taskId === s.tasks[0].id && e.t >= run.startedAt && e.t <= run.finishedAt!);
+      const label = (e: TraceEntry) => {
+        if (/deciding/.test(e.text)) return /Deliberate/.test(e.text) ? 'AI decision — Thorough' : 'AI decision — Quick';
+        return e.text.replace(/^Worker \d+: /, '').replace(/\.$/, '');
+      };
+      times = starts
+        .map((e, i) => {
+          const end = i + 1 < starts.length ? starts[i + 1].t : run.finishedAt!;
+          const mins = (end - e.t) / MIN;
+          return `<tr class="${/Thorough/.test(label(e)) ? 'hot' : ''}"><td>${esc(label(e))}</td><td>${fmtDuration(mins * MIN)}</td></tr>`;
+        })
+        .join('');
+      times = `<tr><td class="muted">Email delivered</td><td class="muted">${fmtTime(run.startedAt)}</td></tr>${times}<tr class="total"><td>Checked on the page</td><td>${fmtTime(run.finishedAt!)}</td></tr>`;
+    }
+    const usedThorough = s.trace.some((e) => e.kind === 'decision' && e.packet?.model === 'deliberate');
+    const tip = usedThorough
+      ? `The Thorough model costs <b>4 credits and 3 minutes</b> per decision; Quick costs <b>1 credit and 1 minute</b>.${
+          s.needsTagline ? ' Quick’s tray holds 10 units with 7 already used — the 2-unit summary fits (7 + 2 = 9), the 5-unit guide doesn’t.' : ''
+        }`
+      : 'Every step costs time; AI decisions and preparing the logo cost credits.';
+    return `<div class="why">
+      <h3>Where your credits and minutes went</h3>
+      <div class="why-grid">
+        ${missed.includes('cheap') ? `<table><thead><tr><th>Credits</th><th></th></tr></thead><tbody>${credits}<tr class="total"><td>Total</td><td>${o.creditsSpent}</td></tr></tbody></table>` : ''}
+        ${missed.includes('fast') && times ? `<table><thead><tr><th>Time</th><th></th></tr></thead><tbody>${times}</tbody></table>` : ''}
+      </div>
+      <p class="small">${tip}</p>
+    </div>`;
   }
 
   private recordRun(o: OpeningOutcome, medals: string[], predictedRight: boolean) {
