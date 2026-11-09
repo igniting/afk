@@ -58,6 +58,10 @@ export class App {
   private seenTrace = 0;
   private scene: BoardScene;
   private debriefShown = false;
+  /** Simple (guided) view by default; "Customize…" reveals every control. */
+  private advanced = false;
+  /** Set when Isha's correction arrives and no watcher is listening. */
+  private missedPrompt: 'open' | 'done' | null = null;
 
   constructor() {
     const { data, warning } = loadSave();
@@ -66,12 +70,14 @@ export class App {
     this.build = data.currentBuild ? clone(data.currentBuild) : emptyBuild();
     this.build.agentName = data.agentName;
     this.build.accent = data.accent;
+    this.advanced = !!data.advanced;
     document.documentElement.style.setProperty('--accent', this.build.accent);
 
     this.scene = new BoardScene($('board'), {
       onSelect: (t) => this.select(t),
       onSlot: (k) => this.act(k === 'watcher' ? 'place-watcher' : 'place-worker'),
     });
+    this.scene.setDetail(this.advanced);
     this.scene.setBuild(this.build);
 
     document.addEventListener('click', (e) => this.onClick(e));
@@ -108,8 +114,15 @@ export class App {
         this.firstSuccessReal = performance.now();
         this.toast('✓ First success — something you built just did real work.', 'good');
       } else if (e.kind === 'reaction') this.toast(`Maya: “${e.text.split('“')[1]?.replace('”', '') ?? ''}”`, 'person');
-      else if (e.kind === 'world' && /corrected/.test(e.text)) this.toast('Isha sent a corrected logo (observer view).', 'warn');
-      else if (e.kind === 'watcher' && /closed/.test(e.text)) this.toast('Watcher closed: its Once rule is satisfied.', 'info');
+      else if (e.kind === 'watcher' && /No armed watcher/.test(e.text) && !this.missedPrompt) {
+        // The key teaching moment: pause and ask one clear question.
+        this.missedPrompt = 'open';
+        this.playing = false;
+        $('toasts').innerHTML = '';
+        this.bump();
+      } else if (e.kind === 'deliver' && /r2/.test(e.text) && !this.missedPrompt)
+        this.toast('Relay’s watcher noticed Isha’s corrected logo by itself.', 'good');
+      else if (e.kind === 'watcher' && /closed/.test(e.text) && this.advanced) this.toast('The watcher switched off — it was set to check only once.', 'info');
       else if (e.kind === 'permission') this.toast('Permission gate blocked a live-page publish. Nothing was sent.', 'warn');
     }
   }
@@ -139,7 +152,8 @@ export class App {
     const app = $('app');
     app.dataset.mode = this.mode;
     app.dataset.view = this.mobileView;
-    $('mode-chip').textContent = this.mode === 'build' ? 'Build' : this.mode === 'run' ? (this.playing ? 'Practice · running' : 'Practice · paused') : '';
+    app.dataset.advanced = String(this.advanced);
+    $('mode-chip').textContent = this.mode === 'build' ? 'Building' : this.mode === 'run' ? (this.playing ? 'Running' : 'Paused') : '';
     this.renderControls();
     this.renderMeters();
     this.renderRail();
@@ -161,8 +175,8 @@ export class App {
     if (this.mode === 'build') {
       const ok = isRunnable(this.build);
       setHtml(c, `
-        <button class="btn" data-action="undo" ${this.history.length ? '' : 'disabled'} title="Undo last change">↶ Undo</button>
-        <button class="btn primary" data-action="run" ${ok ? '' : 'disabled aria-disabled="true"'} title="${ok ? 'Start the run' : 'Finish the build first'}">▶ Run</button>`);
+        ${this.advanced ? `<button class="btn" data-action="undo" ${this.history.length ? '' : 'disabled'} title="Undo last change">↶ Undo</button>` : ''}
+        ${ok ? `<button class="btn primary" data-action="run">▶ Run</button>` : ''}`);
       return;
     }
     if (this.mode !== 'run' || !this.sim) {
@@ -172,22 +186,29 @@ export class App {
     const sim = this.sim;
     const next = sim.nextEventTime();
     const idleGap = next != null && this.playing ? (next - sim.state.time) / MIN / this.speed : 0;
-    const speeds = [1, 4, 16]
+    const speedList = this.advanced ? [1, 4, 16] : [1, 4];
+    const speeds = speedList
       .map((s) => `<button class="btn seg ${this.speed === s ? 'on' : ''}" data-action="speed" data-arg="${s}" aria-pressed="${this.speed === s}">${s}×</button>`)
       .join('');
+    const playBtn = sim.state.ended
+      ? `<button class="btn primary" data-action="debrief">See results</button>`
+      : this.playing
+        ? `<button class="btn" data-action="pause" title="Pause (Space)" aria-label="Pause">⏸<span class="hide-sm"> Pause</span></button>`
+        : `<button class="btn primary" data-action="play" title="Run (Space)">▶ ${sim.state.time === OPENING.start ? 'Run' : 'Resume'}</button>`;
+    const skip = !sim.state.ended && (this.advanced || idleGap > 3)
+      ? `<button class="btn ${idleGap > 3 ? 'pulse' : ''}" data-action="next" title="Skip to next event (N)">⏭ ${idleGap > 3 ? 'Skip ahead' : 'Next<span class="hide-sm"> event</span>'}</button>`
+      : '';
     setHtml(c, `
-      ${
-        sim.state.ended
-          ? `<button class="btn primary" data-action="debrief">See results</button>`
-          : this.playing
-            ? `<button class="btn" data-action="pause" title="Pause (Space)" aria-label="Pause">⏸<span class="hide-sm"> Pause</span></button>`
-            : `<button class="btn primary" data-action="play" title="Run (Space)">▶ Run</button>`
-      }
+      ${playBtn}
       <span class="segs" role="group" aria-label="Speed">${speeds}</span>
-      <button class="btn ${idleGap > 5 ? 'pulse' : ''}" data-action="next" ${sim.state.ended ? 'disabled' : ''} title="Skip to next event (N)">⏭ ${idleGap > 5 ? 'Skip to next event' : 'Next<span class="hide-sm"> event</span>'}</button>
-      ${sim.canOfferEnd() ? `<button class="btn" data-action="end">End opening</button>` : ''}
-      <button class="btn ghost" data-action="restart" title="Rewind to 18:00 as a new branch" aria-label="Rewind to 18:00">↺<span class="hide-sm"> Rewind</span></button>
-      <button class="btn ghost" data-action="to-build" title="Back to build mode" aria-label="Edit build">✎<span class="hide-sm"> Edit build</span></button>`);
+      ${skip}
+      ${sim.canOfferEnd() ? `<button class="btn" data-action="end">Finish</button>` : ''}
+      ${
+        this.advanced
+          ? `<button class="btn ghost" data-action="restart" title="Rewind to 18:00 as a new branch" aria-label="Rewind to 18:00">↺<span class="hide-sm"> Rewind</span></button>
+      <button class="btn ghost" data-action="to-build" title="Back to build mode" aria-label="Edit build">✎<span class="hide-sm"> Edit build</span></button>`
+          : ''
+      }`);
   }
 
   private renderMeters() {
@@ -202,6 +223,10 @@ export class App {
     const t = s ? s.time : OPENING.start;
     const isha = OPENING.availability.isha;
     const ends = OPENING.end;
+    if (!this.advanced) {
+      setHtml(m, `<span class="meter">Goal: logo on the preview by ${fmtTime(OPENING.end)}</span>`);
+      return;
+    }
     setHtml(m, `
       <span class="meter" title="Credits spent of budget"><span aria-hidden="true">◈</span> ${spent}/${budget} credits</span>
       <span class="meter" title="Nearest boundary">${t <= isha.until ? `Isha online until ${fmtTime(isha.until)}` : 'Isha offline'} · ends ${fmtTime(ends)}</span>`);
@@ -215,26 +240,26 @@ export class App {
     const o = s ? evaluateOpening(s) : null;
     const t = s?.time ?? OPENING.start;
     const margin = Math.max(0, (OPENING.end - t) / MIN);
-    let status = 'Accepted. Isha’s logo is expected around 18:02.';
+    let status = 'Isha will email the logo around 18:02.';
     let cls = '';
     if (s && o) {
       const task = s.tasks[0];
       const active = s.workers[0]?.active;
       const handling = task?.run?.logoRev === o.latestSent || task?.pendingLogoRev?.rev === o.latestSent;
       if (o.latestSent > (o.previewRev ?? 0) && handling) {
-        status = `Working on revision ${o.latestSent}${active ? `: ${esc(STEP_INFO[active.step.kind].label)}` : ''}.`;
+        status = `Working on it${active ? ` — ${esc(STEP_INFO[active.step.kind].label.toLowerCase())}` : ''}…`;
       } else if (o.latestSent > (o.previewRev ?? 0)) {
         const knows = s.watchers[0]?.delivered.length === o.latestSent;
-        status = `⚠ Isha has sent revision ${o.latestSent}; the preview shows ${o.previewRev ? `revision ${o.previewRev}` : 'no logo'}.${
-          !knows ? ' <span class="observer">Observer view — Relay has not observed this.</span>' : ''
+        status = `⚠ Isha sent a newer logo, but the preview still shows ${o.previewRev ? 'the old one' : 'no logo'}.${
+          !knows ? ` <span class="observer">${esc(s.build.agentName)} doesn’t know yet.</span>` : ''
         }`;
         cls = 'warn';
         if (active) status += ` In progress: ${esc(STEP_INFO[active.step.kind].label)}.`;
       } else if (o.latestSent && o.previewRev === o.latestSent && o.latestVerifiedAt != null) {
-        status = `✓ Preview shows revision ${o.previewRev}, verified at ${fmtTime(o.latestVerifiedAt)}.`;
+        status = `✓ Done — the preview shows Isha’s ${o.previewRev > 1 ? 'corrected' : ''} logo (checked at ${fmtTime(o.latestVerifiedAt)}).`;
         cls = 'good';
       } else if (active) status = `In progress: ${esc(STEP_INFO[active.step.kind].label)}.`;
-      else if (task?.status === 'WAITING_EVENT') status = 'Waiting for Isha’s logo.';
+      else if (task?.status === 'WAITING_EVENT') status = 'Waiting for Isha’s email.';
       else if (task?.status === 'FAILED') {
         status = `✗ ${esc(task.waitLabel)}`;
         cls = 'bad';
@@ -242,7 +267,7 @@ export class App {
     }
     const p1 = `
       <article class="promise ${cls}">
-        <header><span class="tag">Promise</span><span class="due">by ${fmtTime(OPENING.end)}${s && !s.ended ? ` · ${Math.round(margin)} min left` : ''}</span></header>
+        <header><span class="tag">${this.advanced ? 'Promise' : 'Your job'}</span><span class="due">by ${fmtTime(OPENING.end)}${s && !s.ended ? ` · ${Math.round(margin)} min left` : ''}</span></header>
         <h3>Put Isha’s logo on the preview</h3>
         <p>${status}</p>
       </article>`;
@@ -255,6 +280,10 @@ export class App {
           blocked ? ` ${blocked} proposal${blocked > 1 ? 's' : ''} blocked (not a violation).` : ''
         }</p>
       </article>`;
+    if (!this.advanced) {
+      const simple = p1.replace('</article>', `<p class="small muted">${s && !o?.liveUntouched ? '✗ The live page was changed.' : '🔒 The live page stays untouched — Maya’s rule is enforced for you.'}</p></article>`);
+      return [simple];
+    }
     return [p1, p2];
   }
 
@@ -280,7 +309,7 @@ export class App {
   // Side panel
 
   private renderMobileTabs() {
-    const label = this.mode === 'build' ? 'Build' : 'World & inspect';
+    const label = this.mode === 'build' ? 'Build' : 'World';
     $('mobile-tabs').innerHTML = `
       <button class="tab ${this.mobileView === 'machine' ? 'on' : ''}" data-action="mobile-view" data-arg="machine" aria-pressed="${this.mobileView === 'machine'}">Machine</button>
       <button class="tab ${this.mobileView === 'side' ? 'on' : ''}" data-action="mobile-view" data-arg="side" aria-pressed="${this.mobileView === 'side'}">${label}</button>`;
@@ -289,11 +318,16 @@ export class App {
   private renderSide() {
     const side = $('side');
     if (this.mode === 'build') {
-      setHtml(side, this.selection && this.selection.kind !== 'watcher' && this.selection.kind !== 'worker' ? this.inspectHtml() : this.buildPanelHtml());
+      const panel = this.advanced ? this.buildPanelHtml() : this.guidedBuildHtml();
+      setHtml(side, this.selection && this.selection.kind !== 'watcher' && this.selection.kind !== 'worker' ? this.inspectHtml() : panel);
       return;
     }
     if (this.mode !== 'run') {
       setHtml(side, '');
+      return;
+    }
+    if (!this.advanced) {
+      setHtml(side, this.selection && this.sideTab === 'inspect' ? this.inspectHtml() : this.worldHtml());
       return;
     }
     const tabs = (['world', 'inspect', 'build'] as SideTab[])
@@ -309,6 +343,51 @@ export class App {
     else if (this.sideTab === 'inspect') body = this.inspectHtml();
     else body = this.runBuildHtml();
     setHtml(side, `<div class="side-tabs" role="group" aria-label="Panel">${tabs}</div>${body}`);
+  }
+
+  private guidedBuildHtml(): string {
+    const b = this.build;
+    const w = b.watchers[0];
+    const k = b.workers[0];
+    const step = !w ? 1 : !k ? 2 : !k.templateId && !k.procedure.length ? 3 : 4;
+    const dots = ['Watcher', 'Worker', 'How it works']
+      .map((t, i) => `<li class="${i + 1 < step ? 'done' : i + 1 === step ? 'on' : ''}"><span>${i + 1 < step ? '✓' : i + 1}</span>${t}</li>`)
+      .join('');
+    let body = '';
+    if (step === 1)
+      body = `<h2>Give ${esc(b.agentName)} ears</h2>
+        <p>A <b>watcher</b> notices when Isha’s email arrives and wakes ${esc(b.agentName)} up. While it waits, nothing else runs.</p>
+        <button class="btn primary big wide" data-action="place-watcher">📡 Place the inbox watcher</button>`;
+    else if (step === 2)
+      body = `<h2>Give ${esc(b.agentName)} hands</h2>
+        <p>A <b>worker</b> does the job itself: read the logo and put it on the preview page.</p>
+        <button class="btn primary big wide" data-action="place-worker">🛠️ Place the worker</button>`;
+    else if (step === 3)
+      body = `<h2>How should it work?</h2>
+        <p>Both will get the job done. Pick one — you can try the other later.</p>
+        <div class="big-choices">
+          <button class="btn choice" data-action="template" data-arg="quick"><b>⚡ Quick</b><span>A small, fast AI model reads the email and decides.</span><span class="cost">≈6 min · 3 credits per logo</span></button>
+          <button class="btn choice" data-action="template" data-arg="general"><b>🔍 Thorough</b><span>A bigger AI model that also looks at the page first.</span><span class="cost">≈8.5 min · 6 credits per logo</span></button>
+        </div>`;
+    else {
+      const icons: Record<string, string> = { read_logo: '📖', read_preview: '👀', decide: '🤖', render: '🎨', write_preview: '💾', verify_preview: '✅', publish_live: '🚫' };
+      const plain: Record<string, string> = {
+        read_logo: 'Read Isha’s logo',
+        read_preview: 'Look at the preview page',
+        decide: 'AI decides what to do',
+        render: 'Prepare the logo',
+        write_preview: 'Save it to the preview',
+        verify_preview: 'Check it worked',
+        publish_live: 'Try the live page (will be blocked)',
+      };
+      const flow = k!.procedure.map((st) => `<li>${icons[st.kind]} ${plain[st.kind]}</li>`).join('');
+      body = `<h2>Ready to go</h2>
+        <p>When Isha’s email arrives, ${esc(b.agentName)} will:</p>
+        <ol class="flow"><li>📡 Notice it (watcher ${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>
+        <button class="btn primary big wide" data-action="run">▶ Run</button>
+        <button class="btn ghost wide" data-action="advanced">Customize…</button>`;
+    }
+    return `<ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
   }
 
   private buildPanelHtml(): string {
@@ -331,8 +410,8 @@ export class App {
         <header><h3>Inbox watcher</h3><button class="btn small ghost" data-action="remove-watcher" aria-label="Remove watcher">Remove</button></header>
         <p class="muted">Source: inbox — messages from Isha with a logo attachment.</p>
         <fieldset class="opts"><legend>Wake rule</legend>
-          ${this.radio('wake', 'once', w.wake === 'once', 'Once', 'Fetch the first matching message, then stop watching.')}
-          ${this.radio('wake', 'keep', w.wake === 'keep', 'Keep current', 'Wake on every new matching message.')}
+          ${this.radio('wake', 'once', w.wake === 'once', 'Check once', 'Catch the first matching email, then switch off.')}
+          ${this.radio('wake', 'keep', w.wake === 'keep', 'Keep watching', 'Wake for every new matching email.')}
         </fieldset>
         <label class="field">Deliver to
           <select data-change="deliver">${b.workers.map((x, i) => (x ? `<option value="${i}" ${w.deliverTo === i ? 'selected' : ''}>Worker ${i + 1}</option>` : '')).join('') || '<option>Place a worker first</option>'}</select>
@@ -363,7 +442,8 @@ export class App {
 
     const elapsed = this.buildStartedReal ? Math.round((performance.now() - this.buildStartedReal) / 1000) : 0;
     return `
-      <div class="panel-head"><h2>Build</h2><span class="muted small">${elapsed ? `${elapsed}s in build · ` : ''}no timer runs</span></div>
+      <div class="panel-head"><h2>Build</h2><button class="btn small ghost" data-action="simple">Simple view</button></div>
+      <p class="muted small">${elapsed ? `${elapsed}s in build · ` : ''}no timer runs while you build</p>
       ${this.saveWarning ? `<div class="issues warn"><p>${esc(this.saveWarning)}</p></div>` : ''}
       ${checklist}${warnHtml}
       ${watcherHtml}
@@ -390,6 +470,7 @@ export class App {
         <p class="muted small">Progress is saved on this device.</p>
       </section>`;
   }
+
 
   private radio(name: string, value: string, checked: boolean, title: string, desc: string, live = false): string {
     return `<label class="opt"><input type="radio" name="${name}${live ? '-live' : ''}" value="${value}" data-change="${live ? 'live-' : ''}${name}" ${checked ? 'checked' : ''}/><span><b>${title}</b><span class="muted">${desc}</span></span></label>`;
@@ -460,8 +541,8 @@ export class App {
       ${
         w
           ? `<section class="card"><h3>Inbox watcher</h3><fieldset class="opts"><legend>Wake rule</legend>
-        ${this.radio('wake', 'once', w.wake === 'once', 'Once', 'Fetch the first matching message, then stop.', true)}
-        ${this.radio('wake', 'keep', w.wake === 'keep', 'Keep current', 'Wake on every new matching message.', true)}</fieldset></section>`
+        ${this.radio('wake', 'once', w.wake === 'once', 'Check once', 'Catch the first matching email, then switch off.', true)}
+        ${this.radio('wake', 'keep', w.wake === 'keep', 'Keep watching', 'Wake for every new matching email.', true)}</fieldset></section>`
           : ''
       }
       ${k ? `<section class="card"><h3>Worker 1</h3>${this.liveModelHtml()}${this.procedureEditor(k, false)}</section>` : ''}`;
@@ -509,9 +590,9 @@ export class App {
         if (m.attachment) {
           status = delivered.has(m.id)
             ? `<span class="pill good">Delivered to ${esc(s.build.agentName)}</span>`
-            : `<span class="pill observer">Observer view — ${esc(s.build.agentName)} has not observed this</span>`;
+            : `<span class="pill observer">Only you can see this — ${esc(s.build.agentName)} hasn’t noticed it</span>`;
         } else if (m.id === 'm-maya-brief') status = `<span class="pill">Relay’s instructions</span>`;
-        else status = `<span class="pill observer">Observer view</span>`;
+        else status = `<span class="pill observer">${esc(s.build.agentName)} isn’t watching for this</span>`;
         return `<li class="msg">
           <span class="avatar" style="--c:${person.color}" aria-hidden="true">${person.name[0]}</span>
           <div><div class="msg-head"><b>${person.name}</b> <span class="muted small">${fmtTime(m.arrivedAt)}</span></div>
@@ -521,12 +602,12 @@ export class App {
       })
       .join('');
     return `
-      <div class="panel-head"><h2>World</h2><span class="muted small">what actually happened</span></div>
+      <div class="panel-head"><h2>World</h2><span class="muted small">what really happened</span></div>
       <section class="card page">
         <header><h3>Preview page</h3><span class="pill">Relay may edit</span></header>
         <div class="pagebox"><div class="pg-bar">preview.lumen.app <span>v${p.version}</span></div>
           <div class="pg-body">${logoSvg(p.logoRev, 64)}<div><div class="pg-title">Lumen</div><div class="muted small">Launching tonight</div></div></div></div>
-        ${sentRev > (p.logoRev ?? 0) ? `<p class="small warn-text">Isha’s latest is revision ${sentRev}. <span class="observer">Observer view</span></p>` : ''}
+        ${p.logoRev && sentRev > p.logoRev ? `<p class="small warn-text">Isha has sent a newer logo than this.</p>` : ''}
         ${compare}
       </section>
       <section class="card page">
@@ -546,7 +627,10 @@ export class App {
   private inspectHtml(): string {
     const sel = this.selection;
     const s = this.sim?.state;
-    const back = this.mode === 'build' ? `<button class="btn small ghost" data-action="close-inspect">← Back to build</button>` : '';
+    const back =
+      this.mode === 'build' || !this.advanced
+        ? `<button class="btn small ghost" data-action="close-inspect">← Back</button>`
+        : '';
     if (!sel) return `<div class="panel-head"><h2>Inspect</h2></div><p class="muted">Tap anything on the board — the watcher, workbench, context tray, journal, shelf, or a page — to see what it is doing and why.</p>`;
     if (!s) {
       const what: Record<string, string> = {
@@ -604,13 +688,13 @@ export class App {
         return `${head('Inbox watcher')}
           <dl class="facts">
             <dt>State</dt><dd>${w?.armed ? 'Armed — waiting without running a model.' : esc(w?.closedReason ?? 'Not placed')}</dd>
-            <dt>Wake rule</dt><dd>${cfg?.wake === 'keep' ? 'Keep current — every new matching message' : 'Once — first matching message only'}</dd>
+            <dt>Wake rule</dt><dd>${cfg?.wake === 'keep' ? 'Keep watching — every new matching email' : 'Check once — first matching email only'}</dd>
             <dt>Delivered</dt><dd>${w?.delivered.length ? w.delivered.map((id) => esc(s.world.inbox.find((m) => m.id === id)?.attachment?.name ?? id)).join(', ') : 'Nothing yet'}</dd>
           </dl>
           ${this.pendingLiveHtml()}
           <fieldset class="opts"><legend>Live edit: wake rule</legend>
-            ${this.radio('wake', 'once', cfg?.wake === 'once', 'Once', 'Fetch the first matching message, then stop.', true)}
-            ${this.radio('wake', 'keep', cfg?.wake === 'keep', 'Keep current', 'Re-arms and checks the inbox once on activation.', true)}
+            ${this.radio('wake', 'once', cfg?.wake === 'once', 'Check once', 'Catch the first matching email, then switch off.', true)}
+            ${this.radio('wake', 'keep', cfg?.wake === 'keep', 'Keep watching', 'Re-arms and checks the inbox once on activation.', true)}
           </fieldset>`;
       }
       case 'journal':
@@ -660,7 +744,7 @@ export class App {
 
   private renderTimeline() {
     const tl = $('timeline');
-    if (this.mode !== 'run' || !this.sim) {
+    if (this.mode !== 'run' || !this.sim || !this.advanced) {
       setHtml(tl, '');
       return;
     }
@@ -680,14 +764,49 @@ export class App {
 
   private renderHint() {
     const h = $('board-hint');
-    if (this.mode === 'build') {
+    let html = '';
+    if (this.mode === 'build' && this.advanced) {
       const err = validateBuild(this.build).find((i) => i.level === 'error');
-      h.textContent = err ? err.message : 'Ready. Press ▶ Run.';
-      h.hidden = false;
-    } else if (this.mode === 'run' && this.sim && !this.sim.state.ended && this.sim.state.time === OPENING.start && !this.playing) {
-      h.textContent = 'Press ▶ Run (or Space).';
-      h.hidden = false;
-    } else h.hidden = true;
+      html = esc(err ? err.message : 'Ready. Press ▶ Run.');
+    } else if (this.mode === 'run' && this.sim && !this.sim.state.ended) {
+      if (this.missedPrompt === 'open') {
+        html = `<div class="decision"><p><b>Isha just sent a corrected logo — but ${esc(this.sim.state.build.agentName)} didn’t notice.</b>
+          Its watcher was set to <i>check once</i>, so it switched off after the first email.</p>
+          <div class="row"><button class="btn primary" data-action="missed-keep">📡 Keep watching from now on</button>
+          <button class="btn ghost" data-action="missed-leave">Leave it</button></div></div>`;
+      } else if (this.sim.state.time === OPENING.start && !this.playing) html = 'Press ▶ Run to start the evening.';
+      else html = esc(this.narrate(this.sim));
+    }
+    h.hidden = !html;
+    setHtml(h, html);
+    h.classList.toggle('interactive', this.missedPrompt === 'open');
+  }
+
+  /** One plain-language sentence about what the machine is doing right now. */
+  private narrate(sim: Sim): string {
+    const s = sim.state;
+    const name = s.build.agentName;
+    const a = s.workers[0]?.active;
+    if (a) {
+      const lines: Record<string, string> = {
+        read_logo: `${name} opens Isha’s email and reads the logo file.`,
+        read_preview: `${name} looks at the preview page to see what’s there now.`,
+        decide: `The AI model is deciding what to do. It only sees what’s on its tray: Maya’s instructions and the logo details.`,
+        render: `${name}’s computer prepares the logo for the page (this is the busy part for its CPU).`,
+        write_preview: `${name} saves the new logo to the preview page.`,
+        verify_preview: `${name} checks that the preview page really changed — no “trust me”.`,
+        publish_live: `${name} tries to touch the live page… the permission gate blocks it. Nothing is sent.`,
+      };
+      return lines[a.step.kind];
+    }
+    const armed = s.watchers.some((w) => w.armed);
+    const done = s.tasks[0]?.runs.some((r) => r.notes.receipt);
+    if (!done) return `${name} is waiting for Isha’s email. Nothing is running — the watcher will wake it up.`;
+    if (s.world.latestLogoRevSent > (s.world.preview.logoRev ?? 0) && !armed)
+      return `The preview still shows Isha’s first logo. Nobody is watching the inbox any more.`;
+    return armed
+      ? `Done for now. ${name} is idle, but its watcher stays on duty for new logos.`
+      : `Done. The watcher has switched off — it was set to check only once.`;
   }
 
   private toast(text: string, kind: 'good' | 'warn' | 'info' | 'person') {
@@ -696,7 +815,7 @@ export class App {
     el.className = `toast ${kind}`;
     el.textContent = text;
     box.appendChild(el);
-    while (box.children.length > 3) box.firstElementChild?.remove();
+    while (box.children.length > 2) box.firstElementChild?.remove();
     setTimeout(() => el.classList.add('out'), 5200);
     setTimeout(() => el.remove(), 6000);
   }
@@ -763,35 +882,36 @@ export class App {
     const s = sim.state;
     const w = s.watchers[0];
     const edit = s.interventions[0];
-    let headline: string;
-    if (o.promiseKept)
-      headline = o.interventions
-        ? `The preview shows Isha’s corrected logo — after you stepped in ${o.interventions === 1 ? 'once' : `${o.interventions} times`}.`
-        : 'The preview shows Isha’s corrected logo, and you never had to step in.';
-    else if (o.previewRev) headline = `The preview shows Isha’s first logo — but she sent a correction at 18:12.`;
-    else headline = 'The preview never got a logo.';
-
-    let cause: string;
+    const name = esc(s.build.agentName);
     const r2 = s.world.inbox.find((m) => m.id === 'm-isha-r2');
-    if (o.promiseKept && edit) cause = `You changed the build at ${fmtTime(edit.t)} (“${esc(edit.text)}”); the re-armed watcher found revision 2 waiting, and the preview was verified at ${fmtTime(o.latestVerifiedAt!)}.`;
-    else if (o.promiseKept) cause = `Your continuing watcher delivered revision 2 at ${fmtTime(r2?.arrivedAt ?? 0)}; the preview showed it, verified, at ${fmtTime(o.latestVerifiedAt!)}.`;
-    else if (w && !w.armed && w.wake === 'once') cause = `Your watcher was set to Once, so it closed after the first email. Revision 2 reached the inbox at ${fmtTime(r2?.arrivedAt ?? 0)} but was never delivered to ${esc(s.build.agentName)}.`;
-    else {
+    let headline: string;
+    let cause: string;
+    if (o.promiseKept && !edit) {
+      headline = 'Job done — the preview shows Isha’s corrected logo.';
+      cause = `Your watcher kept watching, so it caught Isha’s correction at ${fmtTime(r2?.arrivedAt ?? 0)} without any help from you.`;
+    } else if (o.promiseKept) {
+      headline = 'Job done — with a little help from you.';
+      cause = `The watcher was set to check once and switched off. When you told it to keep watching, it found Isha’s correction waiting.`;
+    } else if (o.previewRev) {
+      headline = 'The preview shows Isha’s first logo — but she sent a correction.';
+      cause = w && !w.armed
+        ? `The watcher was set to check once, so it switched off after the first email. ${name} never saw the correction.`
+        : 'The correction arrived but wasn’t finished in time.';
+    } else {
+      headline = 'The preview never got a logo.';
       const t = s.tasks[0];
-      cause = t?.status === 'FAILED' ? `The task stopped: ${esc(t.waitLabel)}.` : 'The task did not complete before the opening ended.';
+      cause = t?.status === 'FAILED' ? `The task stopped: ${esc(t.waitLabel)}.` : 'The task didn’t finish before the evening ended.';
     }
+    const lesson = 'The difference: <b>check once</b> finishes a single job; <b>keep watching</b> keeps a promise up to date as things change.';
 
     const first = s.tasks[0]?.runs.find((r) => r.notes.receipt);
     const d = first ? first.procedure.find((x) => x.kind === 'decide') : null;
-    const perLogo = first ? (first.finishedAt! - first.startedAt) / MIN : null;
-    const comparison =
-      first && d
-        ? `Revision 1 took ${fmtDuration(perLogo! * MIN)} from delivery to receipt with a ${MODELS[d.model!].name} decision. ${
-            d.model === 'swift'
-              ? 'Would a Deliberate decision with the full artwork in its tray change the result here — or just the cost?'
-              : 'Would a Swift decision with a focused tray have been enough for an explicit instruction like this?'
-          }`
-        : 'Which step would you change first?';
+    const idea =
+      d?.model === 'swift'
+        ? 'Next idea: try <b>Thorough</b> — does a bigger AI model change the result, or just the cost?'
+        : d
+          ? 'Next idea: try <b>Quick</b> — is a small, cheap AI model enough for a clear instruction like this?'
+          : 'Next idea: change one thing and run it again.';
 
     const builtIn = this.firstSuccessReal && this.buildStartedReal ? Math.round((this.firstSuccessReal - this.buildStartedReal) / 1000) : null;
     this.overlay(`
@@ -803,19 +923,22 @@ export class App {
         <h2>${headline}</h2>
         <p>${cause}</p>
         <ul class="results">
-          <li class="${o.promiseKept ? 'good' : 'bad'}"><span>Promise: logo on the preview</span><b>${o.promiseKept ? 'Kept' : 'Missed'}</b></li>
-          <li class="${o.liveUntouched ? 'good' : 'bad'}"><span>Live page</span><b>${o.liveUntouched ? 'Untouched' : 'Changed'}</b></li>
-          <li><span>First verified success</span><b>${o.firstVerifiedAt ? fmtTime(o.firstVerifiedAt) : '—'}${builtIn != null ? ` <span class="muted small">(${builtIn}s after you started building)</span>` : ''}</b></li>
-          <li><span>Credits</span><b>${o.creditsSpent} / ${o.budget}</b></li>
-          <li><span>Interventions</span><b>${o.interventions}</b></li>
-          ${o.blockedProposals ? `<li><span>Blocked proposals (not violations)</span><b>${o.blockedProposals}</b></li>` : ''}
-          ${o.autonomous ? `<li class="good"><span>Badge</span><b>Autonomous ✦</b></li>` : ''}
+          <li class="${o.promiseKept ? 'good' : 'bad'}"><span>Isha’s latest logo on the preview</span><b>${o.promiseKept ? '✓ Yes' : '✗ No'}</b></li>
+          <li class="${o.liveUntouched ? 'good' : 'bad'}"><span>Live page left alone</span><b>${o.liveUntouched ? '✓ Yes' : '✗ No'}</b></li>
+          ${o.autonomous ? `<li class="good"><span>Ran without your help</span><b>✦ Autonomous</b></li>` : ''}
         </ul>
-        <p class="compare-q">${comparison}</p>
+        <p class="compare-q">${lesson}</p>
+        <p>${idea}</p>
+        <details class="numbers"><summary>More numbers</summary><ul class="results">
+          <li><span>First logo checked on the page</span><b>${o.firstVerifiedAt ? fmtTime(o.firstVerifiedAt) : '—'}${builtIn != null ? ` <span class="muted small">(${builtIn}s after you started building)</span>` : ''}</b></li>
+          <li><span>Credits spent</span><b>${o.creditsSpent} / ${o.budget}</b></li>
+          <li><span>Times you stepped in</span><b>${o.interventions}</b></li>
+          ${o.blockedProposals ? `<li><span>Blocked attempts (safe — nothing sent)</span><b>${o.blockedProposals}</b></li>` : ''}
+        </ul></details>
         <div class="choices">
-          <button class="btn choice" data-action="replay-same"><b>Same conditions</b><span>Run this build again from 18:00.</span></button>
-          <button class="btn choice" data-action="change-build"><b>Change the build</b><span>Try another wake rule, model or procedure.</span></button>
-          <button class="btn choice" data-action="continue-story"><b>Continue the story</b><span>Maya’s evening handoff.</span></button>
+          <button class="btn choice" data-action="replay-same"><b>↺ Run it again</b><span>Same build, same evening.</span></button>
+          <button class="btn choice" data-action="change-build"><b>✎ Change the build</b><span>Try another choice.</span></button>
+          <button class="btn choice" data-action="continue-story"><b>→ Continue</b><span>Maya’s evening handoff.</span></button>
         </div>
       </div>`);
     this.bump();
@@ -872,6 +995,10 @@ export class App {
     this.selection = t;
     this.scene.setSelected(t.kind === 'trace' ? null : t);
     if (this.mode === 'run') this.sideTab = t.kind === 'inbox' || t.kind === 'preview' || t.kind === 'live' ? 'world' : 'inspect';
+    if (this.mode === 'build' && !this.advanced && (t.kind === 'watcher' || t.kind === 'worker')) {
+      this.mobileView = 'side'; // the guide lives in the side panel on phones
+      return this.bump();
+    }
     this.mobileView = 'side';
     this.bump();
   }
@@ -885,6 +1012,7 @@ export class App {
     this.mode = 'run';
     this.playing = true;
     this.debriefShown = false;
+    this.missedPrompt = null;
     this.pendingLive = null;
     this.sideTab = 'world';
     this.selection = null;
@@ -907,6 +1035,7 @@ export class App {
     this.scene.setSelected(null);
     this.history = [];
     if (!this.buildStartedReal) this.buildStartedReal = performance.now();
+    if (!this.advanced) this.mobileView = 'side';
     this.persist();
     this.bump();
   }
@@ -954,7 +1083,7 @@ export class App {
       case 'place-watcher':
         if (this.mode !== 'build') return;
         this.select({ kind: 'watcher', idx: 0 });
-        return this.edit((b) => (b.watchers[0] = { card: 'inbox', wake: null, deliverTo: b.workers[0] ? 0 : null }));
+        return this.edit((b) => (b.watchers[0] = { card: 'inbox', wake: 'once', deliverTo: b.workers[0] ? 0 : null }));
       case 'place-worker':
         if (this.mode !== 'build') return;
         this.select({ kind: 'worker', idx: 0 });
@@ -1013,6 +1142,7 @@ export class App {
         return this.startRun();
       case 'play':
         if (this.sim?.state.ended) return;
+        if (this.missedPrompt === 'open') this.missedPrompt = 'done';
         this.playing = true;
         this.pendingLive = null;
         return this.bump();
@@ -1023,6 +1153,7 @@ export class App {
         this.speed = Number(arg);
         return this.bump();
       case 'next':
+        if (this.missedPrompt === 'open') return;
         this.sim?.advanceToNextEvent();
         return this.bump();
       case 'end':
@@ -1081,6 +1212,31 @@ export class App {
           this.playing = true;
         }
         return this.bump();
+      case 'advanced':
+        this.advanced = true;
+        this.save.advanced = true;
+        this.scene.setDetail(true);
+        this.persist();
+        return this.bump();
+      case 'simple':
+        this.advanced = false;
+        this.save.advanced = false;
+        this.scene.setDetail(false);
+        this.persist();
+        return this.bump();
+      case 'missed-keep':
+        if (this.sim) {
+          const b = clone(this.sim.state.build);
+          b.watchers[0]!.wake = 'keep';
+          this.sim.applyLiveEdit(b, 'Watcher → Keep watching');
+        }
+        this.missedPrompt = 'done';
+        this.playing = true;
+        return this.bump();
+      case 'missed-leave':
+        this.missedPrompt = 'done';
+        this.playing = true;
+        return this.bump();
       case 'live-cancel':
         this.pendingLive = null;
         return this.bump();
@@ -1117,7 +1273,7 @@ export class App {
       case 'live-wake':
         return this.proposeLive(
           (b) => (b.watchers[0]!.wake = val as 'once' | 'keep'),
-          `Watcher wake rule → ${val === 'keep' ? 'Keep current' : 'Once'}`,
+          `Watcher → ${val === 'keep' ? 'Keep watching' : 'Check once'}`,
         );
       case 'live-ctx':
         return this.proposeLive((b) => (b.workers[0]!.contextRule = val as 'focused' | 'full'), `Context rule → ${val === 'full' ? 'Full artwork' : 'Focused'}`);

@@ -69,6 +69,7 @@ export class BoardScene {
   private sim: Sim | null = null;
   private build: Build | null = null;
   private selected: Target | null = null;
+  private detail = false;
   private ro: ResizeObserver;
 
   // parts
@@ -156,7 +157,7 @@ export class BoardScene {
     strip.position.set(0, -0.25, -3.6);
     strip.receiveShadow = true;
     s.add(strip);
-    const worldLbl = label('Outside world — observer view', 'lbl zone world');
+    const worldLbl = label('Outside world', 'lbl zone world');
     worldLbl.position.set(7.4, 0.05, -2.25);
     worldLbl.center.set(1, 0.5);
     s.add(worldLbl);
@@ -237,7 +238,7 @@ export class BoardScene {
     tag(g, { kind: 'watcher', idx: 0 });
     this.pickables.push(g);
     this.scene.add(g);
-    this.slot('watcher', p, this.watcherSlot, '+ Place watcher');
+    this.slot('watcher', p, this.watcherSlot, '📡 Place watcher');
 
     // Waiting hook: a task card hanging from a hook (spec §7.2)
     const h = this.hook;
@@ -299,7 +300,7 @@ export class BoardScene {
     this.cpuFill = meter(1.15, '#f59e0b');
     this.ramFill = meter(1.55, '#60a5fa');
     // One combined label avoids overlap: "CPU idle · RAM 0/2 GB".
-    this.cpuLabel = label('CPU', 'lbl small');
+    this.cpuLabel = label('CPU', 'lbl small detail');
     this.cpuLabel.position.set(1.35, 2.7, -0.7);
     g.add(this.cpuLabel);
 
@@ -321,7 +322,7 @@ export class BoardScene {
     const tray = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.06, 0.62), mat('#0f172a'));
     this.tray.add(tray, this.trayTiles);
     this.tray.position.set(-0.45, 1.03, 0.55);
-    this.trayLabel = label('Context tray', 'lbl small');
+    this.trayLabel = label('Context tray', 'lbl small detail');
     this.trayLabel.position.set(0, 0, 0.62);
     this.tray.add(this.trayLabel);
     tag(this.tray, { kind: 'context', idx: 0 });
@@ -335,7 +336,7 @@ export class BoardScene {
     tag(this.tray, { kind: 'context', idx: 0 });
     this.pickables.push(g);
     this.scene.add(g);
-    this.slot('worker', p, this.benchSlot, '+ Place worker');
+    this.slot('worker', p, this.benchSlot, '🛠️ Place worker');
   }
 
   private buildRecords() {
@@ -346,7 +347,7 @@ export class BoardScene {
     pages.position.set(0.04, 0.3, 0);
     cover.castShadow = pages.castShadow = true;
     j.add(cover, pages);
-    this.journalLabel = label('Journal', 'lbl obj');
+    this.journalLabel = label('Journal', 'lbl obj detail');
     this.journalLabel.position.set(0, 0.0, 0.95);
     j.add(this.journalLabel);
     j.position.copy(POS.journal);
@@ -361,7 +362,7 @@ export class BoardScene {
     back.position.set(0, 0.65, -0.33);
     for (const m of [plank, back]) m.castShadow = true;
     s.add(plank, back, this.shelfCards);
-    const sl = label('Artifact shelf', 'lbl obj');
+    const sl = label('Artifact shelf', 'lbl obj detail');
     sl.position.set(0, 0.0, 0.6);
     s.add(sl);
     s.position.copy(POS.shelf);
@@ -497,6 +498,13 @@ export class BoardScene {
   // -------------------------------------------------------------------------
   // State projection
 
+  /** Simple view hides technical labels (CPU/RAM, context units, journal) to keep the board readable. */
+  setDetail(on: boolean) {
+    this.host.dataset.detail = String(on);
+    this.detail = on;
+    if (this.build) this.setBuild(this.build);
+  }
+
   setAccent(hex: string) {
     this.accent.set(hex);
   }
@@ -509,18 +517,19 @@ export class BoardScene {
     this.watcher.visible = !!w;
     this.watcherSlot.visible = !w && !this.sim;
     this.bench.visible = !!k;
-    this.benchSlot.visible = !k && !this.sim;
+    // Guided build: reveal the worker slot only once the watcher is placed.
+    this.benchSlot.visible = !k && !this.sim && (this.detail || !!w);
     for (const l of this.slotLabels) l.element.style.display = l.parent?.visible ? '' : 'none';
-    if (w) this.watcherLabel.element.textContent = `Inbox watcher · ${w.wake === 'keep' ? 'Keep current' : w.wake === 'once' ? 'Once' : 'wake rule?'}`;
+    if (w) this.watcherLabel.element.textContent = `Watcher · ${w.wake === 'keep' ? 'keeps watching' : w.wake === 'once' ? 'checks once' : 'wake rule?'}`;
     if (k) {
       const d = k.procedure.find((s) => s.kind === 'decide');
-      this.modelLabel.element.textContent = d?.model ? `Model: ${MODELS[d.model].name}` : 'Model: —';
-      this.benchLabel.element.textContent = `${build.agentName} · Worker 1`;
+      this.modelLabel.element.textContent = this.detail ? (d?.model ? `Model: ${MODELS[d.model].name}` : 'Model: —') : 'AI model';
+      this.benchLabel.element.textContent = `${build.agentName} · worker`;
     }
     if (!this.sim) {
       this.taskCard.visible = false;
       this.hook.visible = !!w && !!k;
-      this.hookLabel.element.textContent = 'T1 will wait here for Isha’s logo';
+      this.hookLabel.element.textContent = 'The job waits here for Isha’s email';
       this.setTrayTiles([]);
     }
   }
@@ -649,12 +658,12 @@ export class BoardScene {
         wLamp.color.copy(this.accent);
         wLamp.emissive.copy(this.accent).multiplyScalar(pulse);
         this.dish.rotation.x = -1.0;
-        this.watcherLabel.element.textContent = `Watcher · ${wr.wake === 'keep' ? 'Keep current' : 'Once'} · armed`;
+        this.watcherLabel.element.textContent = `Watcher · ${wr.wake === 'keep' ? 'keeps watching' : 'checks once'} · on`;
       } else {
         wLamp.color.set('#475569');
         wLamp.emissive.set('#000');
         this.dish.rotation.x = -0.1;
-        this.watcherLabel.element.textContent = 'Watcher · closed (Once)';
+        this.watcherLabel.element.textContent = 'Watcher · switched off';
       }
     }
 
@@ -667,7 +676,7 @@ export class BoardScene {
     this.hook.visible = !!waiting;
     if (waiting) {
       const avail = this.fixtureAvailability(sim);
-      this.hookLabel.element.textContent = `${task.id} waiting: ${task.status === 'WAITING_EVENT' ? 'logo from Isha' : ''} · ${avail}`;
+      this.hookLabel.element.textContent = this.detail ? `${task.id} waiting: logo from Isha · ${avail}` : 'Waiting for Isha’s email';
       if (!this.reduceMotion) this.hook.rotation.z = Math.sin(this.now / 700) * 0.04;
     }
 
@@ -675,11 +684,11 @@ export class BoardScene {
     const lamp = this.modelLamp.material as THREE.MeshStandardMaterial;
     if (active?.remote) {
       lamp.emissive.set('#a78bfa').multiplyScalar(0.5 + 0.8 * pulse);
-      this.modelLabel.element.textContent = `Model: ${MODELS[active.step.model ?? 'swift'].name} · thinking (remote)`;
+      this.modelLabel.element.textContent = this.detail ? `Model: ${MODELS[active.step.model ?? 'swift'].name} · thinking (remote)` : 'AI thinking…';
     } else {
       lamp.emissive.set('#000');
       const d = s.build.workers[0]?.procedure.find((x) => x.kind === 'decide');
-      this.modelLabel.element.textContent = d?.model ? `Model: ${MODELS[d.model].name}` : 'Model';
+      this.modelLabel.element.textContent = this.detail ? (d?.model ? `Model: ${MODELS[d.model].name}` : 'Model') : 'AI model';
     }
     const cpu = active?.cpu ? 1 : 0;
     this.cpuFill.scale.y = Math.max(0.001, cpu);
@@ -698,14 +707,16 @@ export class BoardScene {
       const left = Math.max(0, active.end - s.time) / 1000;
       const mm = Math.floor(left / 60);
       const ss = Math.floor(left % 60);
-      this.taskLabel.element.textContent = `${active.taskId} · ${STEP_INFO[active.step.kind].label}${active.step.kind === 'decide' ? ` (${MODELS[active.step.model ?? 'swift'].name})` : ''} · ${mm}:${String(ss).padStart(2, '0')} left`;
+      this.taskLabel.element.textContent = this.detail
+        ? `${active.taskId} · ${STEP_INFO[active.step.kind].label}${active.step.kind === 'decide' ? ` (${MODELS[active.step.model ?? 'swift'].name})` : ''} · ${mm}:${String(ss).padStart(2, '0')} left`
+        : `${STEP_INFO[active.step.kind].label}`;
       ((this.taskCard.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).color.copy(this.accent);
-      this.benchLabel.element.textContent = `${s.build.agentName} · Worker 1 · working`;
+      this.benchLabel.element.textContent = `${s.build.agentName} · working`;
       if (!this.reduceMotion) this.taskCard.position.y = 1.6 + Math.sin(this.now / 400) * 0.04;
     } else {
       this.taskCard.visible = false;
       const armed = s.watchers.some((w) => w.armed);
-      this.benchLabel.element.textContent = `${s.build.agentName} · idle · 0 active workers${armed ? ' · watcher armed' : ''}`;
+      this.benchLabel.element.textContent = this.detail ? `${s.build.agentName} · idle · 0 active workers${armed ? ' · watcher armed' : ''}` : `${s.build.agentName} · idle`;
     }
 
     // Context tray: show the latest packet for this worker

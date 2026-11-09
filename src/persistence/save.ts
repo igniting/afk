@@ -23,6 +23,7 @@ export interface SaveData {
   savedBuilds: Build[];
   openingCompleted: boolean;
   runs: RunSummary[];
+  advanced?: boolean;
 }
 
 export function defaultSave(): SaveData {

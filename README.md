@@ -44,11 +44,11 @@ The same engine powers interactive play and the headless tests.
 
 ## Roadmap
 
-- **Phase 1 — Construction proof (Gate A)** ✅ The opening, *“Take one thing off my plate”*:
-  place a watcher and worker, pick/edit a procedure, choose a model and context rule, run it,
-  get a verified first success, then meet the “do it once” vs “keep this current” complication.
-  Practice mode with pause, speeds, next-event, rewind and live edits; inspector with causal
-  “follow cause”; context tray with visible exclusions; permission gate; debrief.
+- **Phase 1 — Construction proof (Gate A)** ✅ The opening, *“Take one thing off my plate”*.
+  A guided, three-step build (watcher → worker → Quick or Thorough), a run narrated in plain
+  language, one paused decision when Isha's correction is missed (“check once” vs “keep
+  watching”), and a short debrief. **Customize…** reveals the full controls: step editor, models,
+  context rules, CPU/RAM, journal, timeline, inspector with “follow cause”, rewind and live edits.
 - **Phase 2 — One satisfying shift (Gate B)**: *“Everyone is leaving”* with optional commitments,
   two workers on the Team machine, approvals, CPU/RAM contention, credits, the social-image
   opportunity, Away mode, run comparison, and the three alternate fixtures.

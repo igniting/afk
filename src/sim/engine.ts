@@ -118,7 +118,7 @@ export class Sim {
       if (!w || !w.wake) return;
       s.watchers.push({ idx, armed: true, wake: w.wake, closedReason: null, delivered: [], configVersion: 1 });
       this.journal(
-        `Watcher armed: inbox, messages from Isha with a logo. Wake rule: ${w.wake === 'once' ? 'Once' : 'Keep current'}.`,
+        `Watcher armed: inbox, messages from Isha with a logo. Wake rule: ${w.wake === 'once' ? 'Check once' : 'Keep watching'}.`,
       );
     });
     this.trace({ kind: 'watcher', actor: 'relay', text: 'Inbox watcher armed; worker idle. No model is running.', cause: start });
@@ -261,9 +261,9 @@ export class Sim {
     this.journal(`Event recorded: ${m.attachment!.name} from Isha.`);
     if (w.wake === 'once') {
       w.armed = false;
-      w.closedReason = `Wake rule “Once” satisfied at ${fmtTime(s.time)}; watcher closed.`;
+      w.closedReason = `“Check once” rule satisfied at ${fmtTime(s.time)}; watcher closed.`;
       this.trace({ kind: 'watcher', actor: 'relay', text: w.closedReason, cause: d });
-      this.journal('Watcher closed (Once rule).');
+      this.journal('Watcher closed (Check once rule).');
     }
     const target = s.build.watchers[wIdx]?.deliverTo;
     const task = s.tasks.find((t) => t.owner === target && t.responsibility === 'preview_logo');
@@ -657,7 +657,7 @@ export class Sim {
         if (wc.wake === 'keep' && !rt.armed) {
           rt.armed = true;
           rt.closedReason = null;
-          this.trace({ kind: 'watcher', actor: 'relay', text: 'Watcher re-armed with “Keep current”. It will check the inbox once on activation.', cause: id });
+          this.trace({ kind: 'watcher', actor: 'relay', text: 'Watcher re-armed with “Keep watching”. It checks the inbox once on activation.', cause: id });
           this.enqueue({ t: s.time + 0.5 * MIN, phase: PHASE.reply, kind: 'watcher_sync', watcher: idx, cause: id });
           for (const t of s.tasks)
             if (t.status === 'DONE' && t.owner === wc.deliverTo) {
