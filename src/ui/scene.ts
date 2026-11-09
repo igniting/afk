@@ -443,8 +443,8 @@ export class BoardScene {
     this.scene.add(this.receipt);
   }
 
-  private drawPreview(rev: number | null, version: number) {
-    drawPage(this.previewCanvas.getContext('2d')!, 512, 320, { title: 'preview.lumen.app', logoRev: rev, version });
+  private drawPreview(rev: number | null, version: number, tagline: string | null = null, needsTagline = false) {
+    drawPage(this.previewCanvas.getContext('2d')!, 512, 320, { title: 'preview.lumen.app', logoRev: rev, version, tagline, needsTagline });
     this.previewTex.needsUpdate = true;
   }
 
@@ -543,6 +543,8 @@ export class BoardScene {
     this.receiptGlow = 0;
     if (!sim) {
       this.drawPreview(null, 1);
+      this.previewLabel.element.textContent = 'Preview page · Relay may edit';
+      this.inboxLabel.element.textContent = 'Inbox';
       this.shelfCards.clear();
       this.setTrayTiles([]);
     }
@@ -734,10 +736,10 @@ export class BoardScene {
     this.inboxLabel.element.textContent = `Inbox · ${s.world.inbox.length}`;
 
     // Preview monitor
-    const pk = `${s.world.preview.version}:${s.world.preview.logoRev}`;
+    const pk = `${s.world.preview.version}:${s.world.preview.logoRev}:${s.world.preview.tagline}`;
     if (pk !== this.previewKey) {
       this.previewKey = pk;
-      this.drawPreview(s.world.preview.logoRev, s.world.preview.version);
+      this.drawPreview(s.world.preview.logoRev, s.world.preview.version, s.world.preview.tagline, s.needsTagline);
       this.previewLabel.element.textContent = `Preview page · v${s.world.preview.version}`;
     }
 

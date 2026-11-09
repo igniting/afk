@@ -35,6 +35,17 @@ export const STEP_INFO: Record<StepKind, StepInfo> = {
     credits: 0,
     remote: false,
   },
+  read_guide: {
+    kind: 'read_guide',
+    label: 'Read brand guide',
+    verb: 'Reading the brand guide from the shelf',
+    explain: 'Tool read: open a brand-guide file so it can be packed into the AI’s tray.',
+    duration: 0.5 * MIN,
+    cpuMinutes: 0,
+    ramGB: 0.1,
+    credits: 0,
+    remote: false,
+  },
   decide: {
     kind: 'decide',
     label: 'Decide',
@@ -112,6 +123,7 @@ export function stepLabel(step: StepDef): string {
 export const ADDABLE_STEPS: StepKind[] = [
   'read_logo',
   'read_preview',
+  'read_guide',
   'decide',
   'render',
   'write_preview',

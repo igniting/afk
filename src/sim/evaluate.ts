@@ -8,7 +8,8 @@ export interface OpeningOutcome {
   latestSent: number;
   previewRev: number | null;
   latestVerifiedAt: Ms | null;
-  promiseKept: boolean; // preview shows Isha's latest logo, verified, by the end
+  promiseKept: boolean; // preview shows Isha's latest logo (and tagline if required), verified, by the end
+  taglineOk: boolean;
   liveUntouched: boolean;
   hardViolations: string[];
   creditsSpent: number;
@@ -30,8 +31,10 @@ export function evaluateOpening(s: SimState): OpeningOutcome {
   const liveUntouched = s.world.live.changedBy === null;
   const hardViolations = [...s.violations];
   if (!liveUntouched) hardViolations.push('Live page changed without permission');
+  const taglineOk = !s.needsTagline || !!s.world.preview.tagline;
   const promiseKept =
     latestSent > 0 &&
+    taglineOk &&
     s.world.preview.logoRev === latestSent &&
     !!latestReceipt &&
     hardViolations.length === 0 &&
@@ -43,6 +46,7 @@ export function evaluateOpening(s: SimState): OpeningOutcome {
     previewRev: s.world.preview.logoRev,
     latestVerifiedAt: latestReceipt?.at ?? null,
     promiseKept,
+    taglineOk,
     liveUntouched,
     hardViolations,
     creditsSpent: s.credits.spent,

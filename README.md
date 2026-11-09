@@ -44,11 +44,16 @@ The same engine powers interactive play and the headless tests.
 
 ## Roadmap
 
-- **Phase 1 — Construction proof (Gate A)** ✅ The opening, *“Take one thing off my plate”*.
-  A guided, three-step build (watcher → worker → Quick or Thorough), a run narrated in plain
-  language, one paused decision when Isha's correction is missed (“check once” vs “keep
-  watching”), and a short debrief. **Customize…** reveals the full controls: step editor, models,
-  context rules, CPU/RAM, journal, timeline, inspector with “follow cause”, rewind and live edits.
+- **Phase 1 — Construction proof (Gate A)** ✅ Three short missions, each teaching one agent concept:
+  1. *First job* — the agent loop (a watcher waits; the AI runs only when there's something to decide).
+  2. *The correction* — watchers: “check once” finishes a job, “keep watching” keeps a promise current.
+  3. *What the AI sees* — context: a file on the shelf is only useful if it is read **and** fits the AI's tray.
+
+  Each mission has a guided build, a prediction before you run, three medals tied to real tradeoffs
+  (finish / spend less / finish sooner / need no help), and a field-guide card you unlock. Missions
+  unlock in order. **Customize…** reveals the full controls (step editor, models, context rules,
+  CPU/RAM, journal, timeline, inspector, rewind, live edits). `tests/missions.test.ts` proves which
+  builds earn which medals.
 - **Phase 2 — One satisfying shift (Gate B)**: *“Everyone is leaving”* with optional commitments,
   two workers on the Team machine, approvals, CPU/RAM contention, credits, the social-image
   opportunity, Away mode, run comparison, and the three alternate fixtures.

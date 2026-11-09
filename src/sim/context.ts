@@ -8,7 +8,14 @@ export function candidateTiles(run: TaskRun, fixture: Fixture, rule: ContextRule
   const n = run.notes;
   const c: Candidate[] = [
     { id: 'header', label: 'Runtime + tool schema', units: 2, source: 'runtime', category: 'header', mandatory: true },
-    { id: 'goal', label: 'Goal: put Isha’s logo on the preview', units: 1, source: 'task card', category: 'pinned' },
+    {
+      id: 'goal',
+      label: fixture.needsTagline ? 'Goal: Isha’s logo + the brand tagline on the preview' : 'Goal: put Isha’s logo on the preview',
+      units: 1,
+      source: 'task card',
+      category: 'pinned',
+      data: { needsTagline: !!fixture.needsTagline },
+    },
     {
       id: 'constraint',
       label: 'Maya: preview is editable; leave the live page alone',
@@ -33,7 +40,16 @@ export function candidateTiles(run: TaskRun, fixture: Fixture, rule: ContextRule
       units: 2,
       source: 'Read current preview',
       category: 'retrieved',
-      data: { logoRev: n.previewState.logoRev },
+      data: { logoRev: n.previewState.logoRev, tagline: n.previewState.tagline },
+    });
+  if (n.guide)
+    c.push({
+      id: 'guide',
+      label: `${n.guide.name}${n.guide.tagline ? ' (includes the tagline)' : ''}`,
+      units: n.guide.units,
+      source: 'Read brand guide',
+      category: 'retrieved',
+      data: { tagline: n.guide.tagline },
     });
   if (n.metadata)
     c.push({
@@ -44,7 +60,7 @@ export function candidateTiles(run: TaskRun, fixture: Fixture, rule: ContextRule
       category: 'raw',
       skipReason: rule === 'focused' ? 'Not selected: the Focused rule sends metadata, not the raw file' : undefined,
     });
-  for (const f of fixture.shelfFiles)
+  for (const f of fixture.shelfFiles.filter((f) => f.id !== n.guide?.fileId))
     c.push({
       id: f.id,
       label: f.name,

@@ -19,9 +19,11 @@ export function decide(packet: ContextPacket): Decision {
     };
   }
   const rev = meta.data?.logoRev ?? 0;
+  const needsTagline = !!has('goal')?.data?.needsTagline;
+  const tagline = has('guide')?.data?.tagline ?? null;
   const preview = has('preview');
   if (preview) {
-    if (preview.data?.logoRev === rev) {
+    if (preview.data?.logoRev === rev && (!needsTagline || (tagline && preview.data?.tagline === tagline))) {
       return {
         proposal: { kind: 'no_change', logoRev: rev },
         rule: 'already-current',
@@ -29,9 +31,16 @@ export function decide(packet: ContextPacket): Decision {
       };
     }
   }
+  if (needsTagline && !tagline) {
+    return {
+      proposal: { kind: 'update_preview', logoRev: rev, tagline: null },
+      rule: 'update-preview-tagline-missing',
+      explanation: `The goal asks for the brand tagline, but no brand guide is in the packet. The rule never invents facts: place logo revision ${rev} and leave the tagline marked as missing.`,
+    };
+  }
   return {
-    proposal: { kind: 'update_preview', logoRev: rev },
+    proposal: { kind: 'update_preview', logoRev: rev, tagline },
     rule: 'update-preview',
-    explanation: `The packet contains Isha’s logo revision ${rev} and Maya’s permission to edit the preview. Rule “update preview” matches: render it and save it to the preview page.`,
+    explanation: `The packet contains Isha’s logo revision ${rev} and Maya’s permission to edit the preview. ${tagline ? ` The brand guide in the packet gives the tagline “${tagline}”.` : ''} Rule “update preview” matches: render it and save it to the preview page.`,
   };
 }

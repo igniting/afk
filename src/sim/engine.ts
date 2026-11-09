@@ -54,7 +54,7 @@ export class Sim {
       interventions: [],
       world: {
         inbox: fixture.messages.filter((m) => m.preexisting).map((m) => ({ ...m, arrivedAt: m.at })),
-        preview: { version: 1, logoRev: null, history: [{ version: 1, logoRev: null, at: fixture.start, writer: 'Maya' }] },
+        preview: { version: 1, logoRev: null, tagline: null, history: [{ version: 1, logoRev: null, tagline: null, at: fixture.start, writer: 'Maya' }] },
         live: { version: 1, changedBy: null },
         latestLogoRevSent: 0,
         mayaThanked: false,
@@ -70,6 +70,7 @@ export class Sim {
       cores: machine.cores,
       trace: [],
       violations: [],
+      needsTagline: !!fixture.needsTagline,
       blockedProposals: 0,
       ended: false,
     };
@@ -321,6 +322,7 @@ export class Sim {
       configVersion: s.configVersion,
       procedure: clone(cfg.procedure),
       contextRule: cfg.contextRule,
+      guide: cfg.guide ?? 'none',
       startedAt: s.time,
       finishedAt: null,
       notes: {},
@@ -466,7 +468,7 @@ export class Sim {
         break;
       }
       case 'read_preview': {
-        n.previewState = { version: s.world.preview.version, logoRev: s.world.preview.logoRev, observedAt: s.time };
+        n.previewState = { version: s.world.preview.version, logoRev: s.world.preview.logoRev, tagline: s.world.preview.tagline, observedAt: s.time };
         this.state.agentKnown.previewVersion = s.world.preview.version;
         this.trace({
           kind: 'step_done',
@@ -478,12 +480,26 @@ export class Sim {
         });
         break;
       }
+      case 'read_guide': {
+        const want = run.guide === 'summary' ? 'summary' : 'full';
+        const f = this.fixture.shelfFiles.find((x) => (x.kind ?? 'full') === want) ?? this.fixture.shelfFiles[0];
+        if (f) n.guide = { fileId: f.id, name: f.name, units: f.units, tagline: f.tagline ?? null };
+        this.trace({
+          kind: 'step_done',
+          actor: 'relay',
+          taskId: task.id,
+          worker: wIdx,
+          text: f ? `Read ${f.name} (${f.units} units).` : 'No brand guide on the shelf.',
+          cause,
+        });
+        break;
+      }
       case 'decide': {
         const d = decide(a.packet!);
         n.proposal = d.proposal;
         const text =
           d.proposal.kind === 'update_preview'
-            ? `Decision: render logo revision ${d.proposal.logoRev} and save it to the preview.`
+            ? `Decision: render logo revision ${d.proposal.logoRev}${s.needsTagline ? (d.proposal.tagline ? ' with the tagline' : ' — tagline missing, no guide in the tray') : ''} and save it to the preview.`
             : d.proposal.kind === 'no_change'
               ? `Decision: preview already shows revision ${d.proposal.logoRev}; just verify.`
               : `Decision: required evidence missing (${d.proposal.what}).`;
@@ -507,8 +523,9 @@ export class Sim {
         break;
       }
       case 'render': {
-        const rev = (n.proposal as { logoRev: number }).logoRev;
-        n.rendered = { logoRev: rev, storage: 'temporary' };
+        const prop = n.proposal as { logoRev: number; tagline: string | null };
+        const rev = prop.logoRev;
+        n.rendered = { logoRev: rev, tagline: prop.tagline ?? null, storage: 'temporary' };
         s.shelf.push({ artifact: 'render', version: s.shelf.filter((v) => v.artifact === 'render').length + 1, logoRev: rev, writer: `Worker ${wIdx + 1}`, at: s.time, storage: 'temporary' });
         this.trace({ kind: 'step_done', actor: 'relay', taskId: task.id, worker: wIdx, text: `Rendered logo revision ${rev} (temporary file).`, cause });
         break;
@@ -531,12 +548,14 @@ export class Sim {
           return;
         }
         const rev = n.rendered!.logoRev;
+        const tagline = n.rendered!.tagline;
         const version = s.world.preview.version + 1;
         s.world.preview.version = version;
         s.world.preview.logoRev = rev;
-        s.world.preview.history.push({ version, logoRev: rev, at: s.time, writer: s.build.agentName });
+        s.world.preview.tagline = tagline;
+        s.world.preview.history.push({ version, logoRev: rev, tagline, at: s.time, writer: s.build.agentName });
         this.state.agentKnown.previewVersion = version;
-        n.written = { version, logoRev: rev };
+        n.written = { version, logoRev: rev, tagline };
         s.shelf.push({ artifact: 'preview', version, logoRev: rev, writer: `Worker ${wIdx + 1}`, at: s.time, storage: 'shared' });
         const w = this.trace({
           kind: 'write',
@@ -556,12 +575,15 @@ export class Sim {
         const want = n.written?.logoRev ?? (n.proposal as { logoRev: number }).logoRev;
         if (s.world.preview.logoRev === want) {
           n.receipt = { version: s.world.preview.version, logoRev: want, at: s.time };
+          const missingTagline = s.needsTagline && !s.world.preview.tagline;
           this.trace({
             kind: 'verify',
             actor: 'relay',
             taskId: task.id,
             worker: wIdx,
-            text: `Verified: the preview page shows logo revision ${want}. Receipt stored.`,
+            text: missingTagline
+              ? `Verified: the preview shows logo revision ${want}, but the tagline is missing. Receipt stored honestly.`
+              : `Verified: the preview page shows logo revision ${want}${s.needsTagline ? ' with the tagline' : ''}. Receipt stored.`,
             cause,
           });
         } else {

@@ -3,13 +3,14 @@ import { Sim } from '../sim/engine';
 import { evaluateOpening, type OpeningOutcome } from '../sim/evaluate';
 import { forecastProcedure, isRunnable, validateBuild, MAX_STEPS } from '../sim/compiler';
 import { ADDABLE_STEPS, STEP_INFO, stepCredits, stepDuration } from '../sim/steps';
-import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type StepKind, type TraceEntry, type WorkerCfg } from '../sim/types';
-import { OPENING, TEMPLATES, emptyBuild } from '../content/opening';
+import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type Fixture, type StepKind, type TraceEntry, type WorkerCfg } from '../sim/types';
+import { TEMPLATES, emptyBuild, setGuide } from '../content/opening';
+import { CONCEPTS, COMING_SOON, MISSIONS, type Mission } from '../content/missions';
 import { loadSave, writeSave, exportSave, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
 
-type Mode = 'title' | 'brief' | 'build' | 'run';
+type Mode = 'title' | 'map' | 'brief' | 'build' | 'run';
 type Selection = Target | { kind: 'trace'; id: number };
 type SideTab = 'build' | 'world' | 'inspect';
 
@@ -62,6 +63,15 @@ export class App {
   private advanced = false;
   /** Set when Isha's correction arrives and no watcher is listening. */
   private missedPrompt: 'open' | 'done' | null = null;
+  private mission: Mission = MISSIONS[0];
+  /** Guided build steps the player has explicitly answered. */
+  private guideDone = new Set<string>();
+  private predicted: string | null = null;
+  private initialWake: 'once' | 'keep' | null = null;
+
+  private get fx(): Fixture {
+    return this.mission.fixture;
+  }
 
   constructor() {
     const { data, warning } = loadSave();
@@ -100,6 +110,8 @@ export class App {
       if (sim.state.ended) this.playing = false;
     }
     if (sim) this.handleNewTrace(sim);
+    // Nothing left to happen: finish the evening instead of making the player wait.
+    if (this.mode === 'run' && sim && this.playing && sim.canOfferEnd() && !this.missedPrompt?.startsWith('open')) sim.runToEnd();
     this.scene.frame(now);
     this.renderTick();
     if (sim?.state.ended && !this.debriefShown) this.showDebrief();
@@ -114,7 +126,7 @@ export class App {
         this.firstSuccessReal = performance.now();
         this.toast('✓ First success — something you built just did real work.', 'good');
       } else if (e.kind === 'reaction') this.toast(`Maya: “${e.text.split('“')[1]?.replace('”', '') ?? ''}”`, 'person');
-      else if (e.kind === 'watcher' && /No armed watcher/.test(e.text) && !this.missedPrompt) {
+      else if (e.kind === 'watcher' && /No armed watcher/.test(e.text) && !this.missedPrompt && this.mission.askWake) {
         // The key teaching moment: pause and ask one clear question.
         this.missedPrompt = 'open';
         this.playing = false;
@@ -129,7 +141,7 @@ export class App {
 
   private renderTick() {
     const sim = this.sim;
-    $('clock').textContent = fmtTime(sim ? sim.state.time : OPENING.start);
+    $('clock').textContent = fmtTime(sim ? sim.state.time : this.fx.start);
     const key = [
       this.mode,
       this.uiVersion,
@@ -194,7 +206,7 @@ export class App {
       ? `<button class="btn primary" data-action="debrief">See results</button>`
       : this.playing
         ? `<button class="btn" data-action="pause" title="Pause (Space)" aria-label="Pause">⏸<span class="hide-sm"> Pause</span></button>`
-        : `<button class="btn primary" data-action="play" title="Run (Space)">▶ ${sim.state.time === OPENING.start ? 'Run' : 'Resume'}</button>`;
+        : `<button class="btn primary" data-action="play" title="Run (Space)">▶ ${sim.state.time === this.fx.start ? 'Run' : 'Resume'}</button>`;
     const skip = !sim.state.ended && (this.advanced || idleGap > 3)
       ? `<button class="btn ${idleGap > 3 ? 'pulse' : ''}" data-action="next" title="Skip to next event (N)">⏭ ${idleGap > 3 ? 'Skip ahead' : 'Next<span class="hide-sm"> event</span>'}</button>`
       : '';
@@ -219,12 +231,12 @@ export class App {
     }
     const s = this.sim?.state;
     const spent = s ? s.credits.spent : MACHINES[this.build.machine].rent;
-    const budget = OPENING.budget;
-    const t = s ? s.time : OPENING.start;
-    const isha = OPENING.availability.isha;
-    const ends = OPENING.end;
+    const budget = this.fx.budget;
+    const t = s ? s.time : this.fx.start;
+    const isha = this.fx.availability.isha;
+    const ends = this.fx.end;
     if (!this.advanced) {
-      setHtml(m, `<span class="meter">Goal: logo on the preview by ${fmtTime(OPENING.end)}</span>`);
+      setHtml(m, `<span class="meter">Mission ${this.mission.n}: ${esc(this.mission.goal)}</span>`);
       return;
     }
     setHtml(m, `
@@ -238,8 +250,8 @@ export class App {
   private promiseCards(): string[] {
     const s = this.sim?.state;
     const o = s ? evaluateOpening(s) : null;
-    const t = s?.time ?? OPENING.start;
-    const margin = Math.max(0, (OPENING.end - t) / MIN);
+    const t = s?.time ?? this.fx.start;
+    const margin = Math.max(0, (this.fx.end - t) / MIN);
     let status = 'Isha will email the logo around 18:02.';
     let cls = '';
     if (s && o) {
@@ -255,6 +267,9 @@ export class App {
         }`;
         cls = 'warn';
         if (active) status += ` In progress: ${esc(STEP_INFO[active.step.kind].label)}.`;
+      } else if (o.latestSent && o.previewRev === o.latestSent && o.latestVerifiedAt != null && !o.taglineOk) {
+        status = '⚠ The logo is on the preview, but the tagline is missing.';
+        cls = 'warn';
       } else if (o.latestSent && o.previewRev === o.latestSent && o.latestVerifiedAt != null) {
         status = `✓ Done — the preview shows Isha’s ${o.previewRev > 1 ? 'corrected' : ''} logo (checked at ${fmtTime(o.latestVerifiedAt)}).`;
         cls = 'good';
@@ -267,8 +282,8 @@ export class App {
     }
     const p1 = `
       <article class="promise ${cls}">
-        <header><span class="tag">${this.advanced ? 'Promise' : 'Your job'}</span><span class="due">by ${fmtTime(OPENING.end)}${s && !s.ended ? ` · ${Math.round(margin)} min left` : ''}</span></header>
-        <h3>Put Isha’s logo on the preview</h3>
+        <header><span class="tag">${this.advanced ? 'Promise' : 'Your job'}</span><span class="due">by ${fmtTime(this.fx.end)}${s && !s.ended ? ` · ${Math.round(margin)} min left` : ''}</span></header>
+        <h3>${esc(this.mission.goal)}</h3>
         <p>${status}</p>
       </article>`;
     const blocked = s?.blockedProposals ?? 0;
@@ -345,49 +360,106 @@ export class App {
     setHtml(side, `<div class="side-tabs" role="group" aria-label="Panel">${tabs}</div>${body}`);
   }
 
+  private guidedSteps(): { id: string; label: string; done: boolean }[] {
+    const b = this.build;
+    const k = b.workers[0];
+    const steps = [
+      { id: 'watcher', label: 'Watcher', done: !!b.watchers[0] },
+      { id: 'worker', label: 'Worker', done: !!k },
+      { id: 'how', label: 'AI model', done: !!k && (!!k.templateId || k.procedure.length > 0) },
+    ];
+    if (this.mission.askWake) steps.push({ id: 'wake', label: 'Watching', done: this.guideDone.has('wake') });
+    if (this.mission.askGuide) steps.push({ id: 'guide', label: 'AI tray', done: this.guideDone.has('guide') });
+    steps.push({ id: 'predict', label: 'Predict', done: !!this.predicted });
+    return steps;
+  }
+
   private guidedBuildHtml(): string {
     const b = this.build;
     const w = b.watchers[0];
     const k = b.workers[0];
-    const step = !w ? 1 : !k ? 2 : !k.templateId && !k.procedure.length ? 3 : 4;
-    const dots = ['Watcher', 'Worker', 'How it works']
-      .map((t, i) => `<li class="${i + 1 < step ? 'done' : i + 1 === step ? 'on' : ''}"><span>${i + 1 < step ? '✓' : i + 1}</span>${t}</li>`)
+    const steps = this.guidedSteps();
+    const current = steps.find((x) => !x.done)?.id ?? 'ready';
+    const dots = steps
+      .map((t, i) => `<li class="${t.done ? 'done' : t.id === current ? 'on' : ''}"><span>${t.done ? '✓' : i + 1}</span>${t.label}</li>`)
       .join('');
+    const name = esc(b.agentName);
     let body = '';
-    if (step === 1)
-      body = `<h2>Give ${esc(b.agentName)} ears</h2>
-        <p>A <b>watcher</b> notices when Isha’s email arrives and wakes ${esc(b.agentName)} up. While it waits, nothing else runs.</p>
+    if (current === 'watcher')
+      body = `<h2>Give ${name} ears</h2>
+        <p>A <b>watcher</b> notices when Isha’s email arrives and wakes ${name} up. While it waits, nothing else runs.</p>
         <button class="btn primary big wide" data-action="place-watcher">📡 Place the inbox watcher</button>`;
-    else if (step === 2)
-      body = `<h2>Give ${esc(b.agentName)} hands</h2>
+    else if (current === 'worker')
+      body = `<h2>Give ${name} hands</h2>
         <p>A <b>worker</b> does the job itself: read the logo and put it on the preview page.</p>
         <button class="btn primary big wide" data-action="place-worker">🛠️ Place the worker</button>`;
-    else if (step === 3)
-      body = `<h2>How should it work?</h2>
-        <p>Both will get the job done. Pick one — you can try the other later.</p>
+    else if (current === 'how')
+      body = `<h2>Which AI model?</h2>
+        <p>The AI model decides what to do with the email. Both can do this job.</p>
         <div class="big-choices">
-          <button class="btn choice" data-action="template" data-arg="quick"><b>⚡ Quick</b><span>A small, fast AI model reads the email and decides.</span><span class="cost">≈6 min · 3 credits per logo</span></button>
-          <button class="btn choice" data-action="template" data-arg="general"><b>🔍 Thorough</b><span>A bigger AI model that also looks at the page first.</span><span class="cost">≈8.5 min · 6 credits per logo</span></button>
+          <button class="btn choice" data-action="template" data-arg="quick"><b>⚡ Quick</b><span>Small, fast model. Its tray holds <b>10 units</b> of information.</span><span class="cost">1 min · 1 credit per decision</span></button>
+          <button class="btn choice" data-action="template" data-arg="general"><b>🔍 Thorough</b><span>Bigger model that also looks at the page first. Its tray holds <b>16 units</b>.</span><span class="cost">3 min · 4 credits per decision</span></button>
         </div>`;
+    else if (current === 'wake')
+      body = `<h2>How long should the watcher watch?</h2>
+        <p>Maya says Isha sometimes sends fixes.</p>
+        <div class="big-choices">
+          <button class="btn choice" data-action="g-wake" data-arg="once"><b>1️⃣ Check once</b><span>Catch the first email, then switch off.</span></button>
+          <button class="btn choice" data-action="g-wake" data-arg="keep"><b>🔁 Keep watching</b><span>Wake ${name} for every new email from Isha.</span></button>
+        </div>`;
+    else if (current === 'guide') body = this.guideStepHtml();
     else {
-      const icons: Record<string, string> = { read_logo: '📖', read_preview: '👀', decide: '🤖', render: '🎨', write_preview: '💾', verify_preview: '✅', publish_live: '🚫' };
+      const icons: Record<string, string> = { read_logo: '📖', read_preview: '👀', read_guide: '📘', decide: '🤖', render: '🎨', write_preview: '💾', verify_preview: '✅', publish_live: '🚫' };
       const plain: Record<string, string> = {
         read_logo: 'Read Isha’s logo',
         read_preview: 'Look at the preview page',
-        decide: 'AI decides what to do',
+        read_guide: k?.guide === 'summary' ? 'Read the brand guide summary (2 units)' : 'Read the brand guide (5 units)',
+        decide: `AI decides (${k?.procedure.find((x) => x.kind === 'decide')?.model === 'deliberate' ? 'Thorough, 16-unit tray' : 'Quick, 10-unit tray'})`,
         render: 'Prepare the logo',
         write_preview: 'Save it to the preview',
         verify_preview: 'Check it worked',
         publish_live: 'Try the live page (will be blocked)',
       };
       const flow = k!.procedure.map((st) => `<li>${icons[st.kind]} ${plain[st.kind]}</li>`).join('');
-      body = `<h2>Ready to go</h2>
-        <p>When Isha’s email arrives, ${esc(b.agentName)} will:</p>
-        <ol class="flow"><li>📡 Notice it (watcher ${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>
-        <button class="btn primary big wide" data-action="run">▶ Run</button>
-        <button class="btn ghost wide" data-action="advanced">Customize…</button>`;
+      const pr = this.mission.prediction;
+      const opts = pr.options
+        .map((o) => `<button class="btn choice ${this.predicted === o.id ? 'on' : ''}" data-action="predict" data-arg="${o.id}" aria-pressed="${this.predicted === o.id}">${esc(o.label)}</button>`)
+        .join('');
+      body = `
+        <p class="muted small">When Isha’s email arrives, ${name} will:</p>
+        <ol class="flow compact"><li>📡 Notice it (${w!.wake === 'keep' ? 'keeps watching' : 'checks once'})</li>${flow}</ol>
+        <div class="predict">
+          <h2>🔮 Your prediction</h2>
+          <p>${esc(pr.question)}</p>
+          <div class="big-choices">${opts}</div>
+        </div>
+        <button class="btn primary big wide" data-action="run" ${this.predicted ? '' : 'disabled'}>${this.predicted ? '▶ Run and find out' : 'Make a prediction to run'}</button>
+        <div class="row"><button class="btn small ghost" data-action="restart-build">↺ Start the build over</button><button class="btn small ghost" data-action="advanced">Customize…</button></div>`;
     }
-    return `<ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
+    return `
+      <div class="mission-head"><span class="kicker">Mission ${this.mission.n} · ${esc(this.mission.title)}</span>
+        <button class="btn small ghost" data-action="map">Missions</button></div>
+      <ol class="guide-steps" aria-label="Build steps">${dots}</ol><section class="guide">${body}</section>`;
+  }
+
+  private guideStepHtml(): string {
+    const k = this.build.workers[0]!;
+    const model = k.procedure.find((x) => x.kind === 'decide')?.model ?? 'swift';
+    const cap = MODELS[model].capacity;
+    const base = 7 + (k.procedure.some((x) => x.kind === 'read_preview') ? 2 : 0);
+    const cells = Array.from({ length: cap }, (_, i) => `<span class="cell ${i < base ? 'used' : ''}"></span>`).join('');
+    const file = (n: number, cls: string) => Array.from({ length: n }, () => `<span class="cell ${cls}"></span>`).join('');
+    return `<h2>What should the AI see?</h2>
+      <p>The tagline is in the brand guide on the shelf. The AI only knows what is put on its <b>tray</b> — and the tray has a size limit.</p>
+      <div class="tray-viz" aria-label="AI tray: ${base} of ${cap} units already used">
+        <div class="tray-row">${cells}</div>
+        <p class="small muted">${MODELS[model].name === 'Swift' ? 'Quick' : 'Thorough'} model tray: <b>${cap} units</b>. Already used by instructions and logo details: <b>${base}</b>.</p>
+      </div>
+      <div class="big-choices">
+        <button class="btn choice" data-action="g-guide" data-arg="full"><b>📘 The full brand guide</b><span class="tray-row small-cells">${file(5, 'file')}</span><span>Brand guide.pdf — 5 units</span></button>
+        <button class="btn choice" data-action="g-guide" data-arg="summary"><b>📝 The guide’s summary</b><span class="tray-row small-cells">${file(2, 'file')}</span><span>Brand guide summary.txt — 2 units</span></button>
+        <button class="btn choice" data-action="g-guide" data-arg="none"><b>🚫 Nothing extra</b><span>Leave the guide on the shelf.</span></button>
+      </div>`;
   }
 
   private buildPanelHtml(): string {
@@ -457,7 +529,7 @@ export class App {
         <h3>Forecast</h3>
         <ul class="plain small">
           <li>Isha expects to send the final logo around <b>18:02</b>.</li>
-          <li>Budget: <b>${OPENING.budget} credits</b> including machine rent.</li>
+          <li>Budget: <b>${this.fx.budget} credits</b> including machine rent.</li>
           <li>Maya reachable until 18:40; Isha until her train at 18:45.</li>
         </ul>
       </section>
@@ -523,6 +595,13 @@ export class App {
         ${k.procedure.length ? `<ol class="steps">${steps}</ol>` : `<p class="muted small">${editable ? 'Pick a template above — you can edit it afterwards.' : 'No steps.'}</p>`}
         ${add}
         ${k.procedure.length ? `<p class="small forecast">Per logo, no contention: <b>${fmtDuration(f.minutes * MIN)}</b>, <b>${f.credits} credits</b>.</p>` : ''}
+        ${
+          this.fx.needsTagline && editable
+            ? `<label class="field">Brand guide file <select data-change="guide">${(['none', 'full', 'summary'] as const)
+                .map((g) => `<option value="${g}" ${(k.guide ?? 'none') === g ? 'selected' : ''}>${g === 'none' ? 'Don’t read it' : g === 'full' ? 'Brand guide.pdf (5 units)' : 'Summary (2 units)'}</option>`)
+                .join('')}</select></label>`
+            : ''
+        }
         <fieldset class="opts"><legend>Context rule <span class="muted small">— what each model call is given</span></legend>
           ${this.radio('ctx', 'focused', k.contextRule === 'focused', 'Focused', 'Attachment details and current state; leave the raw file out.', !editable)}
           ${this.radio('ctx', 'full', k.contextRule === 'full', 'Full artwork', 'Also pack the raw artwork file (6 units) if it fits.', !editable)}
@@ -606,7 +685,7 @@ export class App {
       <section class="card page">
         <header><h3>Preview page</h3><span class="pill">Relay may edit</span></header>
         <div class="pagebox"><div class="pg-bar">preview.lumen.app <span>v${p.version}</span></div>
-          <div class="pg-body">${logoSvg(p.logoRev, 64)}<div><div class="pg-title">Lumen</div><div class="muted small">Launching tonight</div></div></div></div>
+          <div class="pg-body">${logoSvg(p.logoRev, 64)}<div><div class="pg-title">Lumen</div><div class="muted small">${s.needsTagline ? (p.tagline ? esc(p.tagline) : '<span class="missing">[tagline missing]</span>') : 'Launching tonight'}</div></div></div></div>
         ${p.logoRev && sentRev > p.logoRev ? `<p class="small warn-text">Isha has sent a newer logo than this.</p>` : ''}
         ${compare}
       </section>
@@ -617,8 +696,8 @@ export class App {
       </section>
       <section class="card"><h3>Inbox</h3><ul class="inbox">${inbox}</ul></section>
       <section class="card"><h3>People</h3><ul class="plain small">
-        <li><b>Maya</b> (founder) — ${s.time <= OPENING.availability.maya.until ? 'reachable until 18:40' : 'away'}</li>
-        <li><b>Isha</b> (designer) — ${s.time <= OPENING.availability.isha.until ? 'online until her train at 18:45' : 'on her train'}</li></ul></section>`;
+        <li><b>Maya</b> (founder) — ${s.time <= this.fx.availability.maya.until ? 'reachable until 18:40' : 'away'}</li>
+        <li><b>Isha</b> (designer) — ${s.time <= this.fx.availability.isha.until ? 'online until her train at 18:45' : 'on her train'}</li></ul></section>`;
   }
 
   // -------------------------------------------------------------------------
@@ -774,7 +853,7 @@ export class App {
           Its watcher was set to <i>check once</i>, so it switched off after the first email.</p>
           <div class="row"><button class="btn primary" data-action="missed-keep">📡 Keep watching from now on</button>
           <button class="btn ghost" data-action="missed-leave">Leave it</button></div></div>`;
-      } else if (this.sim.state.time === OPENING.start && !this.playing) html = 'Press ▶ Run to start the evening.';
+      } else if (this.sim.state.time === this.fx.start && !this.playing) html = 'Press ▶ Run to start the evening.';
       else html = esc(this.narrate(this.sim));
     }
     h.hidden = !html;
@@ -791,7 +870,8 @@ export class App {
       const lines: Record<string, string> = {
         read_logo: `${name} opens Isha’s email and reads the logo file.`,
         read_preview: `${name} looks at the preview page to see what’s there now.`,
-        decide: `The AI model is deciding what to do. It only sees what’s on its tray: Maya’s instructions and the logo details.`,
+        read_guide: `${name} takes the brand guide off the shelf so it can go on the AI’s tray.`,
+        decide: `The AI model is deciding what to do. It only sees what made it onto its tray — nothing else.`,
         render: `${name}’s computer prepares the logo for the page (this is the busy part for its CPU).`,
         write_preview: `${name} saves the new logo to the preview page.`,
         verify_preview: `${name} checks that the preview page really changed — no “trust me”.`,
@@ -837,38 +917,98 @@ export class App {
 
   private showTitle() {
     this.mode = 'title';
-    const hasSave = !!this.save.currentBuild;
+    const started = Object.keys(this.save.missions ?? {}).length > 0;
     this.overlay(`
       <div class="title-screen">
         <div class="title-mark" aria-hidden="true"></div>
         <h1>Night Shift</h1>
-        <p class="lede">Build your own agent. Leave it in charge. See whether your design survives the night.</p>
+        <p class="lede">Build your own AI agent. Leave it in charge. See whether your design survives the night.</p>
         <label class="field">Name your agent <input type="text" id="agent-name" maxlength="18" value="${esc(this.build.agentName)}" /></label>
         <div class="swatches" role="group" aria-label="Accent colour">${ACCENTS.map(
           (a) => `<button class="swatch ${a === this.build.accent ? 'on' : ''}" style="--c:${a}" data-action="accent" data-arg="${a}" aria-label="Accent ${a}" aria-pressed="${a === this.build.accent}"></button>`,
         ).join('')}</div>
-        <div class="row center">
-          <button class="btn primary big" data-action="start">${hasSave ? 'Start the opening' : 'Start'}</button>
-          ${hasSave ? `<button class="btn big" data-action="continue">Continue with saved build</button>` : ''}
-        </div>
-        <p class="muted small">Phase 1 prototype · single player · no account or API key · progress is saved on this device.</p>
+        <div class="row center"><button class="btn primary big" data-action="start">${started ? 'Continue' : 'Start'}</button></div>
+        <p class="muted small">No account or API key · progress is saved on this device.</p>
         ${this.saveWarning ? `<p class="warn-text small">${esc(this.saveWarning)}</p>` : ''}
       </div>`);
     this.bump();
   }
 
+  private progress(id: string) {
+    return this.save.missions?.[id] ?? { medals: [] as string[], completed: false };
+  }
+
+  private showMap() {
+    this.mode = 'map';
+    this.sim = null;
+    this.scene.setSim(null);
+    this.playing = false;
+    const total = MISSIONS.length * 3;
+    const got = MISSIONS.reduce((n, m) => n + this.progress(m.id).medals.length, 0);
+    const learned = new Set(this.save.concepts ?? []);
+    const pred = this.save.predictions ?? { right: 0, total: 0 };
+    const cards = MISSIONS.map((m, i) => {
+      const p = this.progress(m.id);
+      const unlocked = i === 0 || this.progress(MISSIONS[i - 1].id).completed;
+      const concept = CONCEPTS.find((c) => c.id === m.concept)!;
+      const medals = m.medals.map((md) => `<span class="medal ${p.medals.includes(md.id) ? 'got' : ''}" title="${esc(md.label)}">${md.icon}</span>`).join('');
+      return `<button class="mission-card ${unlocked ? '' : 'locked'} ${p.completed ? 'complete' : ''}" ${unlocked ? `data-action="mission" data-arg="${m.id}"` : 'disabled'}>
+        <span class="mnum">${unlocked ? m.n : '🔒'}</span>
+        <span class="mbody"><b>${esc(m.title)}</b><span class="muted small">${concept.icon} ${esc(concept.title)}</span></span>
+        <span class="medals" aria-label="${p.medals.length} of 3 medals">${medals}</span>
+      </button>`;
+    }).join('');
+    const soon = COMING_SOON.map(
+      (c) => `<div class="mission-card locked"><span class="mnum">🔒</span><span class="mbody"><b>${esc(c.title)}</b><span class="muted small">Coming soon</span></span></div>`,
+    ).join('');
+    const guide = CONCEPTS.map((c) => {
+      const has = learned.has(c.id);
+      return `<li class="concept ${has ? 'got' : ''}"><span class="cicon">${has ? c.icon : '?'}</span><span><b>${has ? esc(c.title) : 'Locked'}</b><span class="muted small">${has ? esc(c.short) : 'Finish a mission to unlock'}</span></span></li>`;
+    }).join('');
+    this.overlay(`
+      <div class="map">
+        <div class="map-head"><h2>Missions</h2><span class="score">🏅 ${got}/${total} medals${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
+        <div class="missions">${cards}${soon}</div>
+        <h3 class="fg-title">📓 Field guide <span class="muted small">${learned.size}/${CONCEPTS.length} concepts</span></h3>
+        <ul class="field-guide">${guide}</ul>
+      </div>`);
+    this.bump();
+  }
+
+  private startMission(id: string) {
+    this.mission = MISSIONS.find((m) => m.id === id) ?? MISSIONS[0];
+    $('toasts').innerHTML = '';
+    this.build = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
+    this.guideDone.clear();
+    this.predicted = null;
+    this.history = [];
+    this.scene.setBuild(this.build);
+    this.showBrief();
+  }
+
+  private markAllGuided() {
+    if (this.mission.askWake) this.guideDone.add('wake');
+    if (this.mission.askGuide) this.guideDone.add('guide');
+  }
+
   private showBrief() {
     this.mode = 'brief';
-    const brief = OPENING.messages.find((m) => m.id === 'm-maya-brief')!;
+    const m = this.mission;
+    const brief = this.fx.messages.find((x) => x.id === 'm-maya-brief')!;
+    const p = this.progress(m.id);
+    const medals = m.medals
+      .map((md) => `<li class="${p.medals.includes(md.id) ? 'got' : ''}"><span class="medal ${p.medals.includes(md.id) ? 'got' : ''}">${md.icon}</span>${esc(md.label)}</li>`)
+      .join('');
     this.overlay(`
       <div class="brief">
-        <p class="kicker">18:00 · ${esc(OPENING.title)}</p>
+        <p class="kicker">Mission ${m.n} · ${esc(m.title)}</p>
         <div class="msg big">
           <span class="avatar" style="--c:${PEOPLE.maya.color}" aria-hidden="true">M</span>
-          <div><b>Maya</b> <span class="muted small">Founder · reachable until 18:40</span><p>${esc(brief.body)}</p></div>
+          <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(brief.body)}</p></div>
         </div>
-        <p class="small muted">Forecast: Isha expects to send the final logo around 18:02.</p>
-        <div class="row center"><button class="btn primary big" data-action="begin-build">Build ${esc(this.build.agentName)}</button></div>
+        <h3 class="left">Medals to earn</h3>
+        <ul class="medal-list">${medals}</ul>
+        <div class="row center"><button class="btn primary big" data-action="begin-build">Build ${esc(this.build.agentName)}</button><button class="btn ghost" data-action="map">Back</button></div>
       </div>`);
     this.bump();
   }
@@ -878,88 +1018,87 @@ export class App {
     this.debriefShown = true;
     this.playing = false;
     const o = evaluateOpening(sim.state);
-    this.recordRun(o);
     const s = sim.state;
-    const w = s.watchers[0];
-    const edit = s.interventions[0];
+    const m = this.mission;
+    const before = this.progress(m.id);
+    const earned = m.medals.filter((md) => md.test(o, s));
+    const correct = m.prediction.answer(s, this.initialWake);
+    const predictedRight = this.predicted === correct;
+    const conceptNew = o.promiseKept && !(this.save.concepts ?? []).includes(m.concept);
+    this.recordRun(o, earned.map((x) => x.id), predictedRight);
+
     const name = esc(s.build.agentName);
-    const r2 = s.world.inbox.find((m) => m.id === 'm-isha-r2');
     let headline: string;
-    let cause: string;
-    if (o.promiseKept && !edit) {
-      headline = 'Job done — the preview shows Isha’s corrected logo.';
-      cause = `Your watcher kept watching, so it caught Isha’s correction at ${fmtTime(r2?.arrivedAt ?? 0)} without any help from you.`;
-    } else if (o.promiseKept) {
-      headline = 'Job done — with a little help from you.';
-      cause = `The watcher was set to check once and switched off. When you told it to keep watching, it found Isha’s correction waiting.`;
-    } else if (o.previewRev) {
-      headline = 'The preview shows Isha’s first logo — but she sent a correction.';
-      cause = w && !w.armed
-        ? `The watcher was set to check once, so it switched off after the first email. ${name} never saw the correction.`
-        : 'The correction arrived but wasn’t finished in time.';
-    } else {
-      headline = 'The preview never got a logo.';
-      const t = s.tasks[0];
-      cause = t?.status === 'FAILED' ? `The task stopped: ${esc(t.waitLabel)}.` : 'The task didn’t finish before the evening ended.';
-    }
-    const lesson = 'The difference: <b>check once</b> finishes a single job; <b>keep watching</b> keeps a promise up to date as things change.';
+    if (o.promiseKept) headline = earned.length === 3 ? 'Perfect run! ✨' : 'Job done!';
+    else if (o.previewRev && !o.taglineOk) headline = 'The logo is up — but the tagline is missing.';
+    else if (o.previewRev) headline = 'The preview shows Isha’s old logo.';
+    else headline = 'The preview never got a logo.';
 
-    const first = s.tasks[0]?.runs.find((r) => r.notes.receipt);
-    const d = first ? first.procedure.find((x) => x.kind === 'decide') : null;
-    const idea =
-      d?.model === 'swift'
-        ? 'Next idea: try <b>Thorough</b> — does a bigger AI model change the result, or just the cost?'
-        : d
-          ? 'Next idea: try <b>Quick</b> — is a small, cheap AI model enough for a clear instruction like this?'
-          : 'Next idea: change one thing and run it again.';
+    const medalRow = m.medals
+      .map((md) => {
+        const got = earned.includes(md);
+        const isNew = got && !before.medals.includes(md.id);
+        return `<li class="${got ? 'got' : ''}"><span class="medal big ${got ? 'got' : ''} ${isNew ? 'new' : ''}">${md.icon}</span>
+          <span><b>${esc(md.label)}</b>${isNew ? ' <span class="pill good">new</span>' : ''}${got ? '' : `<span class="muted small block">${esc(md.hint)}</span>`}</span></li>`;
+      })
+      .join('');
+    const chosen = m.prediction.options.find((x) => x.id === this.predicted)?.label ?? '—';
+    const concept = CONCEPTS.find((c) => c.id === m.concept)!;
+    const conceptCard = o.promiseKept
+      ? `<div class="concept-card ${conceptNew ? 'new' : ''}">
+          <div class="cc-head"><span class="cicon">${concept.icon}</span><div><span class="kicker">${conceptNew ? 'New in your field guide' : 'Field guide'}</span><h3>${esc(concept.title)}</h3></div></div>
+          <ul>${concept.points.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>
+        </div>`
+      : `<div class="concept-card locked"><p>🔒 Finish the job to unlock the field-guide card <b>${esc(concept.title)}</b>.</p></div>`;
+    const next = MISSIONS.find((x) => x.n === m.n + 1);
+    const tagline = s.needsTagline ? (s.world.preview.tagline ? esc(s.world.preview.tagline) : '<span class="missing">[tagline missing]</span>') : 'Launching tonight';
 
-    const builtIn = this.firstSuccessReal && this.buildStartedReal ? Math.round((this.firstSuccessReal - this.buildStartedReal) / 1000) : null;
     this.overlay(`
       <div class="debrief">
+        <p class="kicker">Mission ${m.n} · ${esc(m.title)}</p>
         <div class="hero">
           <div class="pagebox"><div class="pg-bar">preview.lumen.app <span>v${s.world.preview.version}</span></div>
-          <div class="pg-body">${logoSvg(o.previewRev, 84)}<div><div class="pg-title">Lumen</div><div class="muted small">Launching tonight</div></div></div></div>
+          <div class="pg-body">${logoSvg(o.previewRev, 72)}<div><div class="pg-title">Lumen</div><div class="muted small">${tagline}</div></div></div></div>
         </div>
         <h2>${headline}</h2>
-        <p>${cause}</p>
-        <ul class="results">
-          <li class="${o.promiseKept ? 'good' : 'bad'}"><span>Isha’s latest logo on the preview</span><b>${o.promiseKept ? '✓ Yes' : '✗ No'}</b></li>
-          <li class="${o.liveUntouched ? 'good' : 'bad'}"><span>Live page left alone</span><b>${o.liveUntouched ? '✓ Yes' : '✗ No'}</b></li>
-          ${o.autonomous ? `<li class="good"><span>Ran without your help</span><b>✦ Autonomous</b></li>` : ''}
-        </ul>
-        <p class="compare-q">${lesson}</p>
-        <p>${idea}</p>
+        <ul class="medal-results">${medalRow}</ul>
+        ${
+          this.predicted
+            ? `<div class="prediction-result ${predictedRight ? 'right' : 'wrong'}">
+          <p><b>🔮 ${predictedRight ? 'You predicted it!' : 'Not what you predicted.'}</b> You said: “${esc(chosen)}”</p>
+          <p>${esc(m.prediction.explain(s))}</p>
+        </div>`
+            : `<div class="prediction-result"><p>${esc(m.prediction.explain(s))}</p></div>`
+        }
+        ${conceptCard}
         <details class="numbers"><summary>More numbers</summary><ul class="results">
-          <li><span>First logo checked on the page</span><b>${o.firstVerifiedAt ? fmtTime(o.firstVerifiedAt) : '—'}${builtIn != null ? ` <span class="muted small">(${builtIn}s after you started building)</span>` : ''}</b></li>
+          <li><span>First check that the page changed</span><b>${o.firstVerifiedAt ? fmtTime(o.firstVerifiedAt) : '—'}</b></li>
           <li><span>Credits spent</span><b>${o.creditsSpent} / ${o.budget}</b></li>
           <li><span>Times you stepped in</span><b>${o.interventions}</b></li>
-          ${o.blockedProposals ? `<li><span>Blocked attempts (safe — nothing sent)</span><b>${o.blockedProposals}</b></li>` : ''}
+          <li><span>${name}’s live page</span><b>${o.liveUntouched ? 'Untouched ✓' : 'Changed ✗'}</b></li>
         </ul></details>
         <div class="choices">
-          <button class="btn choice" data-action="replay-same"><b>↺ Run it again</b><span>Same build, same evening.</span></button>
-          <button class="btn choice" data-action="change-build"><b>✎ Change the build</b><span>Try another choice.</span></button>
-          <button class="btn choice" data-action="continue-story"><b>→ Continue</b><span>Maya’s evening handoff.</span></button>
+          <button class="btn choice" data-action="change-build"><b>↺ Try again</b><span>Keep your build, change one thing.</span></button>
+          ${
+            next && o.promiseKept
+              ? `<button class="btn choice primary-choice" data-action="next-mission"><b>Next mission →</b><span>${esc(next.title)}</span></button>`
+              : `<button class="btn choice" data-action="map"><b>Missions</b><span>See your medals and field guide.</span></button>`
+          }
         </div>
       </div>`);
     this.bump();
   }
 
-  private showContinue() {
-    this.overlay(`
-      <div class="brief">
-        <p class="kicker">Coming next · Shift 1</p>
-        <div class="msg big"><span class="avatar" style="--c:${PEOPLE.maya.color}" aria-hidden="true">M</span>
-          <div><b>Maya</b><p>Please launch the approved page tonight. Nora would also like a partner message, and I’d love a summary of the feedback before I leave. Take on what you can finish.</p></div></div>
-        <p>The evening shift — <b>“Everyone is leaving”</b> — arrives in the next build phase: optional commitments, a second worker, approvals, credits that matter, and Away mode.</p>
-        <p class="muted small">Your build “${esc(this.build.name)}” is saved on this device and will carry forward.</p>
-        <div class="row center"><button class="btn primary" data-action="change-build">Keep experimenting</button><button class="btn" data-action="export">Export save</button></div>
-      </div>`);
-  }
-
-  private recordRun(o: OpeningOutcome) {
+  private recordRun(o: OpeningOutcome, medals: string[], predictedRight: boolean) {
+    const m = this.mission;
+    const prev = this.progress(m.id);
+    this.save.missions = { ...(this.save.missions ?? {}), [m.id]: { medals: [...new Set([...prev.medals, ...medals])], completed: prev.completed || o.promiseKept } };
+    if (o.promiseKept) this.save.concepts = [...new Set([...(this.save.concepts ?? []), m.concept])];
+    const pr = this.save.predictions ?? { right: 0, total: 0 };
+    if (this.predicted) this.save.predictions = { right: pr.right + (predictedRight ? 1 : 0), total: pr.total + 1 };
     this.save.runs.push({
       at: new Date().toISOString(),
-      fixture: `${OPENING.id}@${OPENING.version}`,
+      fixture: `${this.fx.id}@${this.fx.version}`,
       buildName: this.build.name,
       promiseKept: o.promiseKept,
       autonomous: o.autonomous,
@@ -1005,8 +1144,10 @@ export class App {
 
   private startRun() {
     if (!isRunnable(this.build)) return;
+    if (!this.advanced && !this.predicted) return this.bump();
     this.overlay(null);
-    this.sim = new Sim(OPENING, this.build);
+    this.initialWake = this.build.watchers[0]?.wake ?? null;
+    this.sim = new Sim(this.fx, this.build);
     this.seenTrace = this.sim.state.trace.length;
     this.scene.setSim(this.sim);
     this.mode = 'run';
@@ -1025,6 +1166,7 @@ export class App {
 
   private toBuild(from?: Build) {
     this.overlay(null);
+    $('toasts').innerHTML = '';
     if (from) this.build = clone(from);
     this.sim = null;
     this.scene.setSim(null);
@@ -1053,16 +1195,8 @@ export class App {
       case 'start': {
         const name = ($('agent-name') as HTMLInputElement | null)?.value.trim();
         if (name) this.build.agentName = name;
-        this.build = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
-        this.history = [];
         this.persist();
-        this.scene.setBuild(this.build);
-        return this.showBrief();
-      }
-      case 'continue': {
-        const name = ($('agent-name') as HTMLInputElement | null)?.value.trim();
-        if (name) this.build.agentName = name;
-        return this.toBuild();
+        return this.showMap();
       }
       case 'begin-build':
         this.buildStartedReal = performance.now();
@@ -1106,6 +1240,7 @@ export class App {
           w.contextRule = t.contextRule;
           w.templateId = t.id;
           if (!w.responsibilities.length) w.responsibilities = ['preview_logo'];
+          if (w.guide && w.guide !== 'none') setGuide(w, w.guide);
         });
       }
       case 'step-up':
@@ -1166,12 +1301,13 @@ export class App {
       case 'debrief':
         return this.showDebrief();
       case 'replay-same':
-        this.build = clone(this.sim?.state.build ?? this.build);
-        return this.startRun();
       case 'change-build':
+        // Keep the build so the player can change one thing; ask for a fresh prediction.
+        this.predicted = null;
+        this.markAllGuided();
         return this.toBuild(this.sim?.state.build);
       case 'continue-story':
-        return this.showContinue();
+        return this.showMap();
       case 'export': {
         const blob = new Blob([exportSave(this.save)], { type: 'application/json' });
         const a = document.createElement('a');
@@ -1212,6 +1348,31 @@ export class App {
           this.playing = true;
         }
         return this.bump();
+      case 'g-wake':
+        this.guideDone.add('wake');
+        this.predicted = null;
+        return this.edit((b) => (b.watchers[0]!.wake = arg as 'once' | 'keep'));
+      case 'g-guide':
+        this.guideDone.add('guide');
+        this.predicted = null;
+        return this.edit((b) => setGuide(b.workers[0]!, arg as 'none' | 'full' | 'summary'));
+      case 'predict':
+        this.predicted = arg!;
+        return this.bump();
+      case 'restart-build':
+        this.build = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
+        this.guideDone.clear();
+        this.predicted = null;
+        this.scene.setBuild(this.build);
+        return this.bump();
+      case 'map':
+        return this.showMap();
+      case 'mission':
+        return this.startMission(arg!);
+      case 'next-mission': {
+        const next = MISSIONS.find((m) => m.n === this.mission.n + 1);
+        return next ? this.startMission(next.id) : this.showMap();
+      }
       case 'advanced':
         this.advanced = true;
         this.save.advanced = true;
@@ -1261,6 +1422,8 @@ export class App {
         return this.edit((b) => (b.watchers[0]!.deliverTo = Number(val)));
       case 'resp':
         return this.edit((b) => (b.workers[0]!.responsibilities = (el as HTMLInputElement).checked ? ['preview_logo'] : []));
+      case 'guide':
+        return this.edit((b) => setGuide(b.workers[0]!, val as 'none' | 'full' | 'summary'));
       case 'ctx':
         return this.edit((b) => (b.workers[0]!.contextRule = val as 'focused' | 'full'));
       case 'step-model':

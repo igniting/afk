@@ -120,3 +120,13 @@ export function referenceBuild(templateId: 'quick' | 'general', wake: 'once' | '
   b.workers = [newWorkerFromTemplate(templateId)];
   return b;
 }
+
+/** Point a worker at a brand-guide file, inserting or removing the read step as needed. */
+export function setGuide(w: WorkerCfg, guide: 'none' | 'full' | 'summary') {
+  w.guide = guide;
+  w.procedure = w.procedure.filter((s) => s.kind !== 'read_guide');
+  if (guide !== 'none') {
+    const at = w.procedure.findIndex((s) => s.kind === 'read_logo');
+    w.procedure.splice(at + 1, 0, { kind: 'read_guide' });
+  }
+}

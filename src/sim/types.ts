@@ -75,6 +75,7 @@ export const MACHINES: Record<'compact', MachinePlan> = {
 export type StepKind =
   | 'read_logo'
   | 'read_preview'
+  | 'read_guide'
   | 'decide'
   | 'render'
   | 'write_preview'
@@ -102,7 +103,11 @@ export interface WorkerCfg {
   procedure: StepDef[];
   contextRule: ContextRule;
   templateId: string | null;
+  /** Which brand-guide file a "Read brand guide" step reads. */
+  guide?: GuideChoice;
 }
+
+export type GuideChoice = 'none' | 'full' | 'summary';
 
 export interface Build {
   name: string;
@@ -144,7 +149,9 @@ export interface Fixture {
   availability: Record<string, { label: string; until: Ms }>;
   delegation: { preview: 'edit'; live: 'none' };
   /** Files on the shared shelf at shift start that no step reads by default. */
-  shelfFiles: { id: string; name: string; units: number }[];
+  shelfFiles: { id: string; name: string; units: number; kind?: 'full' | 'summary'; tagline?: string }[];
+  /** The job also requires the brand tagline on the preview. */
+  needsTagline?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +176,7 @@ export interface ContextTile {
   included: boolean;
   reason: string;
   /** Typed content the authored rules can read (the label is only presentation). */
-  data?: { logoRev?: number | null };
+  data?: { logoRev?: number | null; tagline?: string | null; needsTagline?: boolean };
 }
 
 export interface ContextPacket {
@@ -180,17 +187,18 @@ export interface ContextPacket {
 }
 
 export type Proposal =
-  | { kind: 'update_preview'; logoRev: number }
+  | { kind: 'update_preview'; logoRev: number; tagline: string | null }
   | { kind: 'no_change'; logoRev: number }
   | { kind: 'need_evidence'; what: string };
 
 export interface RunNotes {
   metadata?: { attachmentId: string; name: string; logoRev: number; from: PersonId };
-  previewState?: { version: number; logoRev: number | null; observedAt: Ms };
+  previewState?: { version: number; logoRev: number | null; tagline: string | null; observedAt: Ms };
+  guide?: { fileId: string; name: string; units: number; tagline: string | null };
   rawArtworkRead?: boolean;
   proposal?: Proposal;
-  rendered?: { logoRev: number; storage: 'temporary' };
-  written?: { version: number; logoRev: number };
+  rendered?: { logoRev: number; tagline: string | null; storage: 'temporary' };
+  written?: { version: number; logoRev: number; tagline: string | null };
   receipt?: { version: number; logoRev: number; at: Ms };
   blocked?: string[];
 }
@@ -202,6 +210,7 @@ export interface TaskRun {
   configVersion: number;
   procedure: StepDef[];
   contextRule: ContextRule;
+  guide: GuideChoice;
   startedAt: Ms;
   finishedAt: Ms | null;
   notes: RunNotes;
@@ -273,7 +282,8 @@ export interface WorldState {
   preview: {
     version: number;
     logoRev: number | null;
-    history: { version: number; logoRev: number | null; at: Ms; writer: string }[];
+    tagline: string | null;
+    history: { version: number; logoRev: number | null; tagline: string | null; at: Ms; writer: string }[];
   };
   live: { version: number; changedBy: string | null };
   latestLogoRevSent: number;
@@ -346,6 +356,7 @@ export interface SimState {
   cores: number;
   trace: TraceEntry[];
   violations: string[];
+  needsTagline: boolean;
   blockedProposals: number;
   ended: boolean;
 }

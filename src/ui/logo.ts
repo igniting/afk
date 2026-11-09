@@ -13,7 +13,7 @@ export function drawPage(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  opts: { title: string; logoRev: number | null; locked?: boolean; version: number },
+  opts: { title: string; logoRev: number | null; locked?: boolean; version: number; tagline?: string | null; needsTagline?: boolean },
 ) {
   ctx.fillStyle = '#f8fafc';
   ctx.fillRect(0, 0, w, h);
@@ -49,7 +49,8 @@ export function drawPage(
   ctx.fillText('Lumen', w * 0.5, h * 0.5);
   ctx.fillStyle = '#64748b';
   ctx.font = `${Math.round(h * 0.07)}px system-ui, sans-serif`;
-  ctx.fillText(opts.locked ? 'Coming soon' : 'Launching tonight', w * 0.5, h * 0.64);
+  if (opts.needsTagline && !opts.tagline) ctx.fillStyle = '#dc2626';
+  ctx.fillText(opts.locked ? 'Coming soon' : opts.needsTagline ? (opts.tagline ?? '[tagline missing]') : 'Launching tonight', w * 0.5, h * 0.64);
   if (opts.locked) {
     ctx.fillStyle = '#475569';
     ctx.font = `600 ${Math.round(h * 0.07)}px system-ui, sans-serif`;

@@ -24,6 +24,9 @@ export interface SaveData {
   openingCompleted: boolean;
   runs: RunSummary[];
   advanced?: boolean;
+  missions?: Record<string, { medals: string[]; completed: boolean }>;
+  concepts?: string[];
+  predictions?: { right: number; total: number };
 }
 
 export function defaultSave(): SaveData {

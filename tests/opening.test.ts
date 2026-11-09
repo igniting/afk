@@ -120,6 +120,7 @@ describe('opening fixture', () => {
       configVersion: 1,
       procedure: [],
       contextRule: 'full',
+      guide: 'none',
       startedAt: 0,
       finishedAt: null,
       notes: { metadata: { attachmentId: 'att-logo-r1', name: 'lumen-logo-r1.png', logoRev: 1, from: 'isha' } },

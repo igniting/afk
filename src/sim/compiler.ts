@@ -11,7 +11,7 @@ export interface Issue {
   message: string;
 }
 
-export const MAX_STEPS = 6;
+export const MAX_STEPS = 7;
 
 export function validateProcedure(proc: StepDef[]): Issue[] {
   const issues: Issue[] = [];
@@ -44,6 +44,13 @@ export function validateProcedure(proc: StepDef[]): Issue[] {
     err('Add “Verify preview”. Relay cannot call the task done without evidence that the page actually changed.');
   else if (write >= 0 && verify < write) err('“Verify preview” must come after “Save to preview”.');
 
+  const rg = idx('read_guide');
+  if (rg >= 0 && decide >= 0 && rg > decide)
+    issues.push({
+      level: 'warn',
+      where: 'procedure',
+      message: '“Read brand guide” after Decide means the AI never sees it.',
+    });
   const rp = idx('read_preview');
   if (rp >= 0 && decide >= 0 && rp > decide)
     issues.push({
