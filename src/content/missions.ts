@@ -7,7 +7,7 @@ import { OPENING } from './opening';
 
 export const TAGLINE = 'Light up launch night.';
 
-export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel' | 'uncertainty' | 'attention' | 'workshop' | 'skills' | 'weekend' | 'foundations';
+export type ConceptId = 'loop' | 'watchers' | 'context' | 'permissions' | 'memory' | 'parallel' | 'uncertainty' | 'attention' | 'workshop' | 'skills' | 'weekend' | 'foundations' | 'security';
 
 export interface Concept {
   id: ConceptId;

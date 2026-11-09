@@ -140,7 +140,9 @@ export interface TileDef {
   author?: string;
   authority?: 'authoritative' | 'speculative';
   supersedes?: string;
-  kind?: 'note' | 'skill' | 'input' | 'answer' | 'doc';
+  kind?: 'note' | 'skill' | 'input' | 'answer' | 'doc' | 'secret';
+  /** Content from outside (emails, web pages, third-party files): data, never instructions. */
+  untrusted?: boolean;
   data?: Record<string, string | number | boolean | null>;
 }
 
@@ -225,6 +227,8 @@ export interface Build {
   admission?: 'decline' | 'fits' | 'always';
   /** Failure Labs only: protections deliberately removed for a disposable experiment. */
   lab?: LabFlags;
+  /** Scope granted to the send tool: only recipients Maya approved, or any address. */
+  sendScope?: 'known' | 'any';
   watchers: (WatcherCfg | null)[];
   workers: (WorkerCfg | null)[];
 }
@@ -276,6 +280,10 @@ export interface Fixture {
   lab?: LabFlags;
   /** Simulated worker restarts (e.g. a crash or redeploy). */
   restarts?: Ms[];
+  /** Who Maya allows Relay to send to. Anyone else is blocked — unless the send tool was granted wider scope. */
+  recipients?: string[];
+  /** Recipients anyone can read (a public channel). */
+  publicChannels?: string[];
   /** The first send of this artifact goes out, but its reply is lost. */
   flakySend?: string;
   /** Uncertain publication: the first publish commits but its reply is lost. */

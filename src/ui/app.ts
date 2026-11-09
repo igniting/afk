@@ -6,7 +6,7 @@ import { ADDABLE_STEPS, STEP_INFO, stepCredits, stepDuration, stepLabel } from '
 import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type Fixture, type StepKind, type TraceEntry, type WorkerCfg } from '../sim/types';
 import { TEMPLATES, emptyBuild, setGuide } from '../content/opening';
 import { CONCEPTS, COMING_SOON, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
-import { MISSIONS } from '../content/campaign';
+import { MISSIONS } from '../content/all';
 import { LABS, type Lab } from '../content/labs';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
@@ -1361,6 +1361,7 @@ export class App {
       '4': 'Shift 4 · Shared workshop',
       '5': 'Shift 5 · A procedure worth keeping',
       '6': 'Shift 6 · The weekend handoff',
+      '7': 'Shift 7 · Untrusted input',
     };
     const shiftOf = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
     let lastShift = '';

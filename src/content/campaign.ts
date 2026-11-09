@@ -53,7 +53,7 @@ export function jobsBuild(
   machine: MachineId,
   perWorker: string[][],
   procedures: Record<string, StepDef[]>,
-  extra: Partial<Pick<Build, 'policies' | 'accepted' | 'admission'>> = {},
+  extra: Partial<Pick<Build, 'policies' | 'accepted' | 'admission' | 'sendScope'>> = {},
 ): Build {
   return {
     ...base,
@@ -92,7 +92,7 @@ const lastSent = (s: SimState, artifact: string) => [...s.world.sent].reverse().
 export const sentAll = (s: SimState, artifact: string) => s.world.sent.filter((x) => x.artifact === artifact);
 
 /** Medal: the required work done right (and no hard violations, within budget). */
-const coreMedal = (label: string, hint: string): Medal => ({
+export const coreMedal = (label: string, hint: string): Medal => ({
   id: 'done',
   icon: '🏁',
   label,
@@ -105,7 +105,7 @@ const coreMedal = (label: string, hint: string): Medal => ({
 });
 
 /** Medal: every job that was taken on done right — and all optional ones taken on. */
-const allJobsMedal = (label: string, hint: string): Medal => ({
+export const allJobsMedal = (label: string, hint: string): Medal => ({
   id: 'all',
   icon: '⭐',
   label,
@@ -117,7 +117,7 @@ const allJobsMedal = (label: string, hint: string): Medal => ({
   },
 });
 
-const byMedal = (by: Ms, label: string, hint: string): Medal => ({
+export const byMedal = (by: Ms, label: string, hint: string): Medal => ({
   id: 'fast',
   icon: '⚡',
   label,
@@ -129,7 +129,7 @@ const byMedal = (by: Ms, label: string, hint: string): Medal => ({
 
 export const choice = (id: string, title: string, prompt: string, options: Choice['options'], showIf?: Choice['showIf']): Choice => ({ id, title, prompt, options, showIf });
 
-const MODEL_CHOICE = choice('model', 'AI model', 'Which AI model makes the decisions?', [
+export const MODEL_CHOICE = choice('model', 'AI model', 'Which AI model makes the decisions?', [
   { id: 'swift', label: '⚡ Quick', desc: 'Small, fast model. Tray holds 10 units.', cost: '1 min · 1 credit per decision' },
   { id: 'deliberate', label: '🔍 Thorough', desc: 'Bigger model. Tray holds 16 units; can weigh conflicting notes.', cost: '3 min · 4 credits per decision' },
 ]);

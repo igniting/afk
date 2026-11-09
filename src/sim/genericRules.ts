@@ -76,6 +76,14 @@ export const SELECT: Record<string, (tiles: TileDef[]) => Picked> = {
     return { chosen, skipped };
   },
 
+  /** Everything, but outside content is wrapped and labelled: data to read, not instructions to follow. */
+  quoted: (tiles) => ({
+    chosen: [...tiles]
+      .map((t) => (t.untrusted ? { ...t, label: `[untrusted · quoted] ${t.label}`, units: t.units + 1, data: { ...(t.data ?? {}), quoted: true } } : t))
+      .sort(newestFirst),
+    skipped: [],
+  }),
+
   /** Failure Lab: everything except the constraints — as if they were never packed. */
   noConstraint: (tiles) => ({
     chosen: tiles.filter((t) => t.kind !== 'note' || t.subject !== 'constraint').sort(newestFirst),
@@ -119,6 +127,7 @@ function tileData(t: TileDef): ContextTile['data'] {
     authority: t.authority ?? null,
     supersedes: t.supersedes ?? null,
     kind: t.kind ?? null,
+    untrusted: t.untrusted ?? false,
     at: t.at,
   } as ContextTile['data'];
 }

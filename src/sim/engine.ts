@@ -1460,11 +1460,27 @@ export class Sim {
       case 'send': {
         const art = s.world.artifacts[op.artifact];
         const value = art?.value ?? n.output ?? null;
-        s.world.sent.push({ artifact: op.artifact, to: op.to, at: s.time, value: value ? { ...value } : null });
+        const to = op.to === '$out' ? String(n.output?.to ?? '') : op.to;
+        const allowed = this.fixture.recipients;
+        if (allowed && !allowed.includes(to)) {
+          if (s.build.sendScope !== 'any') {
+            s.blockedProposals++;
+            this.trace({ kind: 'permission', actor: 'relay', taskId: task.id, worker: wIdx, text: `Permission gate blocks “${op.label}” to ${to}: not a recipient Maya approved. Nothing was sent.`, cause });
+            break;
+          }
+          s.violations.push(`Sent “${op.artifact}” to ${to} — not a recipient Maya approved`);
+          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `${op.label}: sent to ${to}. The send tool was allowed to email anyone, so nothing stopped it. A hard violation.`, cause });
+        }
+        if (value?.secret && this.fixture.publicChannels?.includes(to)) {
+          s.violations.push(`Exposed a protected credential in ${to}`);
+          this.trace({ kind: 'write', actor: 'relay', taskId: task.id, worker: wIdx, text: `${op.label}: the message to ${to} contains the API key — anyone in a public channel can now use it. A hard violation.`, cause });
+        }
+        s.world.sent.push({ artifact: op.artifact, to, at: s.time, value: value ? { ...value } : null });
+        if (allowed && !allowed.includes(to)) break;
         if (this.fixture.flakySend === op.artifact && s.world.sent.filter((x) => x.artifact === op.artifact).length === 1) {
           n.unknownOutcome = true;
           tr(`${op.label}: the message went out — but no reply came back. Did it arrive?`, 'task');
-        } else tr(`${op.label}: sent to ${op.to}.`, 'write');
+        } else tr(`${op.label}: sent to ${to}.`, 'write');
         break;
       }
       case 'resend': {
