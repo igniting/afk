@@ -1,0 +1,23 @@
+{
+  "name": "night-shift",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Night Shift — build an always-on agent and see whether your design survives the night.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.6",
+    "vitest": "4.1.12"
+  }
+}
