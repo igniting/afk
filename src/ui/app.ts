@@ -5,9 +5,11 @@ import { forecastProcedure, isRunnable, validateBuild, MAX_STEPS } from '../sim/
 import { ADDABLE_STEPS, STEP_INFO, stepCredits, stepDuration, stepLabel } from '../sim/steps';
 import { MACHINES, MIN, MODELS, fmtDuration, fmtTime, type Build, type Fixture, type StepKind, type TraceEntry, type WorkerCfg } from '../sim/types';
 import { TEMPLATES, emptyBuild, setGuide } from '../content/opening';
-import { CONCEPTS, COMING_SOON, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
+import { CONCEPTS, COMING_SOON, type ConceptId, setApproval, setRecovery, shiftBuild, type Mission, type Recovery, type ShiftChoices, type Sorting } from '../content/missions';
 import { MISSIONS } from '../content/all';
 import { LABS, type Lab } from '../content/labs';
+import { GUIDE } from '../content/guide';
+import { conceptArt, portrait, timelineSvg } from './art';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
@@ -984,7 +986,7 @@ export class App {
         .slice(0, 12)
         .map((m) => {
           const person = PEOPLE[m.from];
-          return `<li class="msg"><span class="avatar" style="--c:${person.color}" aria-hidden="true">${person.name[0]}</span><div><div class="msg-head"><b>${person.name}</b> <span class="muted small">${fmtTime(m.arrivedAt)}</span></div><div class="small"><b>${esc(m.subject)}</b> — ${esc(m.body)}</div></div></li>`;
+          return `<li class="msg"><span class="avatar portrait" aria-hidden="true">${portrait(m.from)}</span><div><div class="msg-head"><b>${person.name}</b> <span class="muted small">${fmtTime(m.arrivedAt)}</span></div><div class="small"><b>${esc(m.subject)}</b> — ${esc(m.body)}</div></div></li>`;
         })
         .join('')}</ul></section>`;
   }
@@ -1014,7 +1016,7 @@ export class App {
         else if (m.id === 'm-maya-brief') status = `<span class="pill">Relay’s instructions</span>`;
         else status = `<span class="pill observer">${esc(s.build.agentName)} isn’t watching for this</span>`;
         return `<li class="msg">
-          <span class="avatar" style="--c:${person.color}" aria-hidden="true">${person.name[0]}</span>
+          <span class="avatar portrait" aria-hidden="true">${portrait(m.from)}</span>
           <div><div class="msg-head"><b>${person.name}</b> <span class="muted small">${fmtTime(m.arrivedAt)}</span></div>
           <div class="small"><b>${esc(m.subject)}</b> — ${esc(m.body)}</div>
           ${m.attachment ? `<div class="attach">${logoSvg(m.attachment.logoRev, 22)} ${esc(m.attachment.name)}</div>` : ''}
@@ -1369,7 +1371,11 @@ export class App {
       const p = this.progress(m.id);
       // Every mission is open: players may skip ahead (earlier missions just explain the ideas first).
       const sh = shiftOf(m);
-      const heading = sh !== lastShift ? `<h3 class="shift-head">${SHIFTS[sh]}</h3>` : '';
+      const [shName, shTitle] = SHIFTS[sh].split(' · ');
+      const heading =
+        sh !== lastShift
+          ? `<div class="shift-banner"><div class="sb-art" aria-hidden="true">${conceptArt(m.concept)}</div><div class="sb-text"><span class="kicker">${esc(shName)}</span><h3>${esc(shTitle)}</h3></div></div>`
+          : '';
       lastShift = sh;
       const concept = CONCEPTS.find((c) => c.id === m.concept)!;
       const medals = m.medals.map((md) => `<span class="medal ${p.medals.includes(md.id) ? 'got' : ''}" title="${esc(md.label)}">${md.icon}</span>`).join('');
@@ -1395,7 +1401,7 @@ export class App {
     }).join('');
     const guide = CONCEPTS.map((c) => {
       const has = learned.has(c.id);
-      return `<li class="concept ${has ? 'got' : ''}"><span class="cicon">${has ? c.icon : '?'}</span><span><b>${has ? esc(c.title) : 'Locked'}</b><span class="muted small">${has ? esc(c.short) : 'Finish a mission to unlock'}</span></span></li>`;
+      return `<li><button class="concept ${has ? 'got' : ''}" data-action="concept" data-arg="${c.id}"><span class="cicon">${c.icon}</span><span><b>${esc(c.title)}${has ? ' <span class="pill good">✓ practised</span>' : ''}</b><span class="muted small">${esc(c.short)}</span></span><span class="go" aria-hidden="true">›</span></button></li>`;
     }).join('');
     this.overlay(`
       <div class="map">
@@ -1403,7 +1409,7 @@ export class App {
         <div class="missions">${cards}${soon}</div>
         <h3 class="fg-title">🧪 Failure Labs <span class="muted small">Disposable experiments: remove one protection and watch what it was doing. No medals, nothing saved to your missions.</span></h3>
         <div class="missions">${labCards}</div>
-        <h3 class="fg-title">📓 Field guide <span class="muted small">${learned.size}/${CONCEPTS.length} concepts</span></h3>
+        <h3 class="fg-title">📓 Field guide <span class="muted small">${learned.size}/${CONCEPTS.length} practised · tap a concept to read its page</span></h3>
         <ul class="field-guide">${guide}</ul>
       </div>`);
     this.bump();
@@ -1471,14 +1477,73 @@ export class App {
       <div class="brief">
         <p class="kicker">Mission ${m.n} · ${esc(m.title)}</p>
         ${m.challenge ? `<p class="challenge">⚡ Changed conditions: <b>${esc(m.challenge)}</b>. Will the plan that worked before still work?</p>` : ''}
+        <figure class="brief-art" aria-hidden="true">${conceptArt(m.concept)}</figure>
         <div class="msg big">
-          <span class="avatar" style="--c:${PEOPLE.maya.color}" aria-hidden="true">M</span>
+          <span class="avatar portrait" aria-hidden="true">${portrait('maya')}</span>
           <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(brief.body)}</p></div>
         </div>
         <h3 class="left">Medals to earn</h3>
         <ul class="medal-list">${medals}</ul>
         <div class="row center"><button class="btn primary big" data-action="begin-build">Build ${esc(this.build.agentName)}</button><button class="btn ghost" data-action="map">Back</button></div>
       </div>`);
+    this.bump();
+  }
+
+  private timelineHtml(s: Sim['state']): string {
+    const jobs = this.fx.jobs ?? [];
+    const named: Record<string, string> = { launch: '🚀 Launch', feedback: '🗂️ Feedback', partner: '🤝 Nora’s message' };
+    const svg = timelineSvg(s, (taskId) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      const d = jobs.find((j) => j.id === t?.responsibility);
+      return d ? `${d.icon} ${d.title}` : (named[t?.responsibility ?? ''] ?? t?.title ?? taskId);
+    });
+    return svg ? `<div class="why"><h3>How the evening went</h3>${svg}</div>` : '';
+  }
+
+  /** One full page per concept: the idea, how it works, an example, mistakes, real agents, and where to practise. */
+  private showConcept(id: ConceptId) {
+    this.mode = 'map';
+    this.sim = null;
+    this.scene.setSim(null);
+    this.playing = false;
+    const c = CONCEPTS.find((x) => x.id === id) ?? CONCEPTS[0];
+    const g = GUIDE[c.id];
+    const i = CONCEPTS.indexOf(c);
+    const prev = CONCEPTS[(i - 1 + CONCEPTS.length) % CONCEPTS.length];
+    const next = CONCEPTS[(i + 1) % CONCEPTS.length];
+    const practised = (this.save.concepts ?? []).includes(c.id);
+    const missions = MISSIONS.filter((m) => m.concept === c.id);
+    const labs = LABS.filter((l) => l.concept === c.id || MISSIONS.find((m) => m.id === l.lab.after)?.concept === c.id);
+    const practice = [...missions, ...labs]
+      .map((m) => {
+        const p = this.progress(m.id);
+        const isLab = 'lab' in m;
+        return `<button class="mission-card ${isLab ? 'lab' : ''} ${p.completed ? 'complete' : ''}" data-action="mission" data-arg="${m.id}"><span class="mnum">${isLab ? '🧪' : m.n}</span><span class="mbody"><b>${esc(m.title)}</b><span class="muted small">${esc(m.challenge ? `⚡ ${m.challenge}` : m.goal)}</span></span><span class="go" aria-hidden="true">▶</span></button>`;
+      })
+      .join('');
+    const list = (items: string[]) => `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    this.overlay(`
+      <article class="concept-page">
+        <div class="cp-top"><button class="btn ghost small" data-action="map">← Missions</button><span class="muted small">Field guide · ${i + 1} of ${CONCEPTS.length}</span></div>
+        <header class="cp-head"><span class="cicon big">${c.icon}</span><div><h2>${esc(c.title)}</h2>${practised ? '<span class="pill good">✓ practised</span>' : '<span class="pill">not practised yet</span>'}</div></header>
+        <p class="cp-idea">${esc(g.idea)}</p>
+        <figure class="cp-art">${conceptArt(c.id)}</figure>
+        <section><h3>How it works</h3>${g.how.map((x) => `<p>${esc(x)}</p>`).join('')}</section>
+        <section class="cp-example"><h3>🎬 ${esc(g.example.title)}</h3><ol>${g.example.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></section>
+        <div class="cp-cols">
+          <section><h3>👀 Watch for it on the board</h3>${list(g.watch)}</section>
+          <section><h3>⚠️ Common mistakes</h3>${list(g.mistakes)}</section>
+        </div>
+        <section class="cp-real"><h3>🌍 In real AI agents</h3>${list(g.real)}</section>
+        <section><h3>📖 Words worth knowing</h3><dl class="cp-terms">${g.terms.map(([t, d]) => `<dt>${esc(t)}</dt><dd>${esc(d)}</dd>`).join('')}</dl></section>
+        <section><h3>🔑 In short</h3>${list(c.points)}</section>
+        ${practice ? `<section><h3>🎮 Practise it</h3><div class="missions">${practice}</div></section>` : ''}
+        <nav class="cp-nav">
+          <button class="btn choice" data-action="concept" data-arg="${prev.id}"><b>← ${prev.icon} ${esc(prev.title)}</b></button>
+          <button class="btn choice" data-action="concept" data-arg="${next.id}"><b>${next.icon} ${esc(next.title)} →</b></button>
+        </nav>
+      </article>`);
+    document.querySelector('.overlay .sheet')?.scrollTo?.(0, 0);
     this.bump();
   }
 
@@ -1489,7 +1554,7 @@ export class App {
         <p class="kicker">🧪 Failure Lab · ${esc(l.title)}</p>
         <p class="challenge">A disposable experiment. Run it twice: once with <b>${esc(l.lab.on)}</b>, once with <b>${esc(l.lab.off)}</b>. Nothing here changes your missions or saved builds.</p>
         <div class="msg big">
-          <span class="avatar" style="--c:${PEOPLE.maya.color}" aria-hidden="true">M</span>
+          <span class="avatar portrait" aria-hidden="true">${portrait('maya')}</span>
           <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(body)}</p></div>
         </div>
         <div class="row center"><button class="btn primary big" data-action="begin-build">Set up the experiment</button><button class="btn ghost" data-action="map">Back</button></div>
@@ -1551,6 +1616,7 @@ export class App {
         <p class="kicker">🧪 Failure Lab · ${esc(l.title)} · ${esc(versionLabel)}</p>
         <h2>${headline}</h2>
         ${jobsTable}
+        ${this.timelineHtml(s)}
         ${keyLines ? `<div class="why"><h3>What happened</h3><ul class="lab-trace">${keyLines}</ul></div>` : ''}
         ${
           this.predicted
@@ -1562,6 +1628,7 @@ export class App {
           <div class="cc-head"><span class="cicon">🛡️</span><div><span class="kicker">What ${esc(l.lab.removes)} protects against</span><h3>${esc(l.title)}</h3></div></div>
           <ul>${l.lab.lesson.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>
           ${conceptNew ? '<p class="small">🧪 New in your field guide: <b>Why the safety rails exist</b>.</p>' : ''}
+          <button class="btn ghost small" data-action="concept" data-arg="foundations">📖 Read the full page</button>
         </div>
         <div class="choices">
           ${
@@ -1629,6 +1696,7 @@ export class App {
       ? `<div class="concept-card ${conceptNew ? 'new' : ''}">
           <div class="cc-head"><span class="cicon">${concept.icon}</span><div><span class="kicker">${conceptNew ? 'New in your field guide' : 'Field guide'}</span><h3>${esc(concept.title)}</h3></div></div>
           <ul>${concept.points.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>
+          <button class="btn ghost small" data-action="concept" data-arg="${concept.id}">📖 Read the full page</button>
         </div>`
       : `<div class="concept-card locked"><p>🔒 Finish the job to unlock the field-guide card <b>${esc(concept.title)}</b>.</p></div>`;
     const next = MISSIONS.find((x) => x.n === m.n + 1);
@@ -1665,6 +1733,7 @@ export class App {
         </div>${s.goal === 'jobs' ? '-->' : ''}
         <h2>${headline}</h2>
         ${jobsTable}
+        ${s.goal === 'jobs' || s.goal === 'shift' ? this.timelineHtml(s) : ''}
         <ul class="medal-results">${medalRow}</ul>
         ${this.whyHtml(s, o, m.medals.filter((md) => !earned.includes(md)).map((md) => md.id))}
         ${
@@ -2179,6 +2248,8 @@ export class App {
         return this.bump();
       case 'map':
         return this.showMap();
+      case 'concept':
+        return this.showConcept(arg as ConceptId);
       case 'lab-flip': {
         const l = this.lab;
         if (!l) return;

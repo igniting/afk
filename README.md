@@ -90,6 +90,7 @@ The same engine powers interactive play and the headless tests.
   - Shift 4 *Shared workshop* (15–17): two workers on one file, CPU sharing, RAM, machine sizing.
   - Shift 5 *A procedure worth keeping* (18–20): skills, loading one vs all, adapting to new formats.
   - Shift 6 *The weekend handoff* (21–23): admission control, multi-day durable waits, selective escalation.
+  - Shift 7 *Untrusted input* (24–26): see Phase 6.
 
   `tests/campaign.test.ts` proves, for every mission, which builds earn which medals.
 - **Phase 5 — Failure Labs** ✅ (spec §6.4, `src/content/labs.ts`) Five optional, disposable
@@ -102,4 +103,14 @@ The same engine powers interactive play and the headless tests.
   - *Memory overcommit* (after 16): no RAM admission → out of memory, a running job is killed.
 
   `tests/labs.test.ts` proves both versions of every lab behave as described.
+- **Phase 6 — Security, field guide pages and illustrations** ✅
+  - Shift 7 *Untrusted input* (24–26, `src/content/security.ts`): prompt injection (outside text
+    labelled as untrusted data vs pasted into the instructions), least-privilege send tools behind
+    the permission gate, secrets held by the runtime instead of the tray, and a third-party skill
+    that must not widen permissions.
+  - A full field-guide page for each of the 13 concepts (`src/content/guide.ts`): the idea, how it
+    works, a worked example from the game, what to watch on the board, common mistakes, the same
+    idea in real AI agents, key terms, and links to the missions and labs that practise it.
+  - Illustrations drawn as inline SVG (`src/ui/art.ts`): a diagram per concept (concept pages,
+    mission briefs, shift banners), portraits of the cast, and a per-worker run timeline in debriefs.
 - **Later**: save import/export UI, accessibility polish, performance checks.
