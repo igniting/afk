@@ -36,18 +36,18 @@ export class BenchView {
 
   constructor(readonly idx: number) {
     const g = this.group;
-    const top = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.16, 2.0), mat('#475569'));
+    const top = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.16, 2.0), mat('#7a5640'));
     top.position.y = 0.92;
     top.castShadow = top.receiveShadow = true;
     g.add(top);
     for (const [x, z] of [[-1.65, -0.85], [1.65, -0.85], [-1.65, 0.85], [1.65, 0.85]]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), mat('#334155'));
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), mat('#3b2f52'));
       leg.position.set(x, 0.42, z);
       leg.castShadow = true;
       g.add(leg);
     }
     // Model module: a replaceable decision box with a lamp lit only during remote inference.
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.7), mat('#1e1b4b'));
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.7), mat('#2a2370'));
     box.position.set(-1.15, 1.28, -0.45);
     box.castShadow = true;
     this.lamp = new THREE.Mesh(new THREE.SphereGeometry(0.17, 20, 20), mat('#312e81', { emissive: '#000000' }));

@@ -126,8 +126,8 @@ export class BoardScene {
     this.labels.domElement.className = 'labels';
     host.appendChild(this.labels.domElement);
 
-    this.scene.background = new THREE.Color('#0b1120');
-    this.scene.fog = new THREE.Fog('#0b1120', 30, 55);
+    this.scene.background = new THREE.Color('#0d1030');
+    this.scene.fog = new THREE.Fog('#0d1030', 30, 55);
     this.buildWorld();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
@@ -146,11 +146,11 @@ export class BoardScene {
 
   private buildWorld() {
     const s = this.scene;
-    s.add(new THREE.HemisphereLight('#dbe4ff', '#1e293b', 1.35));
+    s.add(new THREE.HemisphereLight('#e2e0ff', '#1d2256', 1.35));
     const warm = new THREE.PointLight('#fde68a', 1.1, 26, 1.4);
     warm.position.set(-6, 6, 4);
     s.add(warm);
-    const cool = new THREE.PointLight('#5eead4', 0.8, 24, 1.4);
+    const cool = new THREE.PointLight('#9aa4ff', 0.9, 24, 1.4);
     cool.position.set(6, 5, -5);
     s.add(cool);
     const sun = new THREE.DirectionalLight('#ffffff', 1.8);
@@ -160,11 +160,11 @@ export class BoardScene {
     Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10 });
     s.add(sun);
 
-    const board = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.4, 6.2), mat('#1e293b'));
+    const board = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.4, 6.2), mat('#1d2256'));
     board.position.set(0, -0.2, 0.75);
     board.receiveShadow = true;
     s.add(board);
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#1a2540'));
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#171b4a'));
     strip.position.set(0, -0.25, -3.6);
     strip.receiveShadow = true;
     s.add(strip);
@@ -179,7 +179,7 @@ export class BoardScene {
       ['Shared records', new THREE.Vector3(4.65, 0, 0.75), 3.6],
     ];
     for (const [name, p, w] of pads) {
-      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#2c3b58'));
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#2a3170'));
       pad.position.set(p.x, 0.03, p.z);
       pad.receiveShadow = true;
       s.add(pad);
@@ -345,7 +345,7 @@ export class BoardScene {
   private buildOutside() {
     // Inbox
     const ib = new THREE.Group();
-    const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.8, 0.9), mat('#2563eb'));
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.8, 0.9), mat('#6d5bd0'));
     box.position.y = 0.9;
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.6, 0.15), mat('#334155'));
     post.position.y = 0.3;

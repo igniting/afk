@@ -9,7 +9,7 @@ import { CONCEPTS, COMING_SOON, type ConceptId, setApproval, setRecovery, shiftB
 import { MISSIONS } from '../content/all';
 import { LABS, type Lab } from '../content/labs';
 import { GUIDE } from '../content/guide';
-import { conceptArt, portrait, timelineSvg } from './art';
+import { conceptArt, portrait, timelineSvg, titleSky } from './art';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
@@ -1323,7 +1323,7 @@ export class App {
     const started = Object.keys(this.save.missions ?? {}).length > 0;
     this.overlay(`
       <div class="title-screen">
-        <div class="title-mark" aria-hidden="true"></div>
+        <div class="title-sky" aria-hidden="true">${titleSky(this.build.accent)}</div>
         <h1>Night Shift</h1>
         <p class="lede">Build your own AI agent. Leave it in charge. See whether your design survives the night.</p>
         <label class="field">Name your agent <input type="text" id="agent-name" maxlength="18" value="${esc(this.build.agentName)}" /></label>
@@ -2040,6 +2040,8 @@ export class App {
         this.scene.setAccent(arg!);
         this.persist();
         if (this.mode === 'title') {
+          const sky = document.querySelector('.title-sky');
+          if (sky) sky.innerHTML = titleSky(arg!);
           document.querySelectorAll('.overlay .swatch').forEach((s) => {
             const on = (s as HTMLElement).dataset.arg === arg;
             s.classList.toggle('on', on);

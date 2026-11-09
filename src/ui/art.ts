@@ -6,10 +6,10 @@ import { fmtTime, type SimState } from '../sim/types';
 const C = {
   ink: '#e2e8f0',
   muted: '#94a3b8',
-  dim: '#475569',
-  panel: '#17223a',
-  panel2: '#1e2a45',
-  line: '#334155',
+  dim: '#4a5290',
+  panel: '#1a1f47',
+  panel2: '#232a5a',
+  line: '#353d80',
   teal: '#5eead4',
   amber: '#fbbf24',
   sky: '#38bdf8',
@@ -305,4 +305,60 @@ export function timelineSvg(s: SimState, jobName: (taskId: string) => string): s
   const legend = tasks.map((t) => `<span class="lg"><i style="background:${color(t)}"></i>${escX(jobName(t))}</span>`).join('');
   return `<figure class="timeline-fig"><svg class="art timeline" viewBox="0 0 ${W} ${H}" role="img" aria-label="Run timeline" xmlns="http://www.w3.org/2000/svg">${axis}${bars}${marks}</svg>
     <figcaption>${legend}<span class="lg"><i class="dot"></i>AI decision</span><span class="lg"><i class="tri"></i>gate blocked</span>${s.violations.length ? '<span class="lg"><i class="tri bad"></i>violation</span>' : ''}</figcaption></figure>`;
+}
+
+// Title screen ------------------------------------------------------------------------
+/** A night skyline: the city sleeps, one window — your agent's — glows in its colour. */
+export function titleSky(accent: string): string {
+  const W = 640;
+  const H = 230;
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  const stars = Array.from({ length: 46 }, () => {
+    const x = rnd() * W;
+    const y = rnd() * 120;
+    const r = rnd() * 1.3 + 0.3;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="#fff" opacity="${(0.35 + rnd() * 0.6).toFixed(2)}"/>`;
+  }).join('');
+  // Two rows of buildings: far (lilac haze) and near (ink), with warm windows here and there.
+  const far: string[] = [];
+  const near: string[] = [];
+  let x = -10;
+  while (x < W) {
+    const w = 34 + rnd() * 40;
+    const h = 60 + rnd() * 70;
+    far.push(`<rect x="${x.toFixed(1)}" y="${(H - h - 30).toFixed(1)}" width="${w.toFixed(1)}" height="${(h + 30).toFixed(1)}" fill="#1c2160"/>`);
+    x += w + 4;
+  }
+  x = -6;
+  let agentDone = false;
+  while (x < W) {
+    const w = 44 + rnd() * 52;
+    const h = 46 + rnd() * 80;
+    const top = H - h;
+    near.push(`<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="#0c0e2a"/>`);
+    for (let wy = top + 10; wy < H - 10; wy += 13)
+      for (let wx = x + 7; wx < x + w - 10; wx += 11) {
+        const v = rnd();
+        if (!agentDone && x > W * 0.52 && wy > top + 20) {
+          agentDone = true;
+          near.push(`<rect x="${(wx - 9).toFixed(1)}" y="${(wy - 9).toFixed(1)}" width="24" height="24" rx="6" fill="${accent}" opacity=".28" filter="url(#glow)"/><rect x="${wx.toFixed(1)}" y="${wy.toFixed(1)}" width="6" height="7" rx="1" fill="${accent}"/>`);
+        } else if (v > 0.86) near.push(`<rect x="${wx.toFixed(1)}" y="${wy.toFixed(1)}" width="6" height="7" rx="1" fill="#ffc46b" opacity="${(0.55 + v * 0.4).toFixed(2)}"/>`);
+      }
+    x += w + 3;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A city at night; one window is lit">
+    <defs>
+      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b0d26"/><stop offset=".6" stop-color="#1b1f5c"/><stop offset="1" stop-color="#3a2c6a"/></linearGradient>
+      <radialGradient id="moonglow"><stop offset="0" stop-color="#fff2d6" stop-opacity=".55"/><stop offset="1" stop-color="#fff2d6" stop-opacity="0"/></radialGradient>
+      <filter id="glow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="4"/></filter>
+      <mask id="crescent"><rect width="${W}" height="${H}" fill="#fff"/><circle cx="${W * 0.8 + 10}" cy="44" r="22" fill="#000"/></mask>
+    </defs>
+    <rect width="${W}" height="${H}" fill="url(#sky)"/>
+    ${stars}
+    <circle cx="${W * 0.8}" cy="50" r="70" fill="url(#moonglow)"/>
+    <circle cx="${W * 0.8}" cy="50" r="24" fill="#ffe6b8" mask="url(#crescent)"/>
+    ${far.join('')}
+    ${near.join('')}
+  </svg>`;
 }
