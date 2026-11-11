@@ -157,6 +157,16 @@ export interface Choice {
   showIf?: (picks: Record<string, string>) => boolean;
 }
 
+/** A mid-run moment: the evening pauses, someone calls, and the player decides on the spot. */
+export interface Call {
+  id: string;
+  at: Ms;
+  who: 'maya' | 'isha' | 'leo' | 'nora';
+  text: string;
+  /** Each option may change some of the mission's choices from now on (work already in flight keeps going). */
+  options: { id: string; label: string; desc: string; picks?: Record<string, string>; showIf?: (picks: Record<string, string>) => boolean }[];
+}
+
 export interface Mission {
   id: string;
   n: number;
@@ -176,6 +186,8 @@ export interface Mission {
   /** Data-driven missions (9+): Relay is already set up; the player makes these choices. */
   choices?: Choice[];
   makeBuild?: (base: Build, picks: Record<string, string>) => Build;
+  /** Mid-run decisions. */
+  calls?: Call[];
   /** Shift number in the campaign (for grouping on the map). */
   shiftNo?: number;
   /** Shift missions build from job/machine/sorting choices instead of a single procedure. */

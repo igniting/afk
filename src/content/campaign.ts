@@ -496,7 +496,7 @@ export const previewProc = (notify: boolean): StepDef[] => [
   ...(notify ? [op.notify('Maya', 'Preview updated with the newest logo.', 'Tell Maya the preview changed')] : []),
 ];
 
-const POLICY_CHOICE = choice('policy', 'New versions', 'Isha keeps sending small tweaks. When a new version arrives, what should Relay do?', [
+export const POLICY_CHOICE = choice('policy', 'New versions', 'Isha keeps sending small tweaks. When a new version arrives, what should Relay do?', [
   { id: 'queue', label: '📥 Redo it after the current one', desc: 'Finish what it’s doing, then render again with the newest version.' },
   { id: 'restart', label: '♻️ Drop everything and start over', desc: 'Cancel the work in progress and start on the newest version.' },
   { id: 'quiet', label: '🤫 Wait for things to calm down', desc: 'Only start once no new version has arrived for a while.' },

@@ -410,7 +410,7 @@ function relayFace(mood: RelayMood, accent: string, x: number, y: number): strin
 }
 
 /** One illustrated story panel: the office at some time of day, who is there, and how the agent's screen looks. */
-export function storyScene(sc: Scene, accent: string): string {
+export function storyScene(sc: Scene, accent: string, shelf: string[] = []): string {
   const W = 640;
   const H = 300;
   let seed = 5;
@@ -463,5 +463,6 @@ export function storyScene(sc: Scene, accent: string): string {
     ${relayFace(mood, accent, 427, 160)}
     <rect x="418" y="216" width="18" height="12" fill="#221812"/><rect x="396" y="226" width="62" height="8" rx="4" fill="#221812"/>
     ${sc.prop ? `<text x="320" y="232" font-size="34" text-anchor="middle">${sc.prop}</text>` : ''}
+    ${shelf.map((e, i) => `<text x="${26 + i * 38}" y="${286}" font-size="26" text-anchor="middle">${e}</text>`).join('')}
   </svg>`;
 }

@@ -63,3 +63,53 @@ describe('Shift 7 — untrusted input', () => {
     expect(play('m26', { skill: 'none' }).medals).toEqual(['done']);
   });
 });
+
+describe('Mid-run calls', () => {
+  function withCall(id: string, picks: Record<string, string>, optionId: string) {
+    const m = MISSIONS.find((x) => x.id === id)!;
+    const call = m.calls![0];
+    const sim = new Sim(m.fixture, m.makeBuild!(emptyBuild(), picks));
+    sim.runUntil(call.at);
+    const opt = call.options.find((o) => o.id === optionId)!;
+    if (opt.picks) sim.applyLiveEdit(m.makeBuild!(emptyBuild(), { ...picks, ...opt.picks }), opt.label);
+    sim.runToEnd();
+    const o = evaluateOpening(sim.state, m.fixture.deadlines, m.fixture);
+    return { s: sim.state, o, medals: m.medals.filter((md) => md.test(o, sim.state)).map((md) => md.id) };
+  }
+  it('M24: labelling emails after Leo’s warning saves a build that would have leaked', () => {
+    const r = withCall('m24', { model: 'swift', handling: 'mixed', scope: 'any' }, 'label');
+    expect(r.s.violations).toEqual([]);
+    expect(r.o.promiseKept).toBe(true);
+  });
+  it('M24: narrowing the tool after the warning blocks the leak, but Ben goes unanswered', () => {
+    const r = withCall('m24', { model: 'swift', handling: 'mixed', scope: 'any' }, 'narrow');
+    expect(r.s.violations).toEqual([]);
+    expect(r.s.blockedProposals).toBe(1);
+    expect(r.o.promiseKept).toBe(false);
+  });
+  it('M24: ignoring the warning still leaks', () => {
+    expect(withCall('m24', { model: 'swift', handling: 'mixed', scope: 'any' }, 'keep').s.violations).toHaveLength(1);
+  });
+  it('M26: revoking the wide permission after Leo’s call blocks the skill’s hidden step in time', () => {
+    const r = withCall('m26', { skill: 'grant' }, 'revoke');
+    expect(r.s.violations).toEqual([]);
+    expect(r.s.blockedProposals).toBe(1);
+    expect(r.o.promiseKept).toBe(true);
+    expect(withCall('m26', { skill: 'grant' }, 'keep').s.violations).toHaveLength(1);
+  });
+});
+
+describe('M27 — the exam', () => {
+  it('only one build earns everything: one worker, wait for calm, label outside text, narrow tool', () => {
+    expect(play('m27', { machine: 'compact', policy: 'quiet', handling: 'quoted', scope: 'known' }).medals).toEqual(['done', 'scope', 'cheap']);
+    expect(play('m27', { machine: 'team', policy: 'queue', handling: 'quoted', scope: 'known' }).medals).toEqual(['done', 'scope']);
+  });
+  it('redoing every logo on one worker makes the customers wait too long', () => {
+    const r = play('m27', { machine: 'compact', policy: 'queue', handling: 'quoted', scope: 'known' });
+    expect(r.medals).toEqual([]);
+    expect(r.predicted).toBe('1');
+  });
+  it('the planted order still leaks if nothing outside the AI stops it', () => {
+    expect(play('m27', { machine: 'team', policy: 'quiet', handling: 'mixed', scope: 'any' }).s.violations).toHaveLength(1);
+  });
+});

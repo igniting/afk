@@ -693,3 +693,24 @@ svg.timeline { background: none; border: 0; box-shadow: none; color: inherit; }
 .sb-teaser { margin: 4px 0 8px; color: #5a4a26; font-size: 14.5px; }
 .sb-text .btn.small { min-height: 30px; padding: 2px 10px; }
 @media (max-width: 640px) { .story-text p { font-size: 18px; } .sb-teaser { font-size: 13.5px; } }
+
+/* ---------- Calls, trust, desk shelf, save tools ---------- */
+.board-hint.interactive:has(.call) { background: var(--panel-2); border: 2px solid #2e2016; border-radius: 14px; font-family: var(--font); max-width: min(620px, calc(100% - 24px)); animation: ring .5s ease-in-out 2; }
+@keyframes ring { 25% { transform: translateX(-50%) rotate(-.6deg); } 75% { transform: translateX(-50%) rotate(.6deg); } }
+.call-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.call-head .avatar { width: 40px; height: 40px; }
+.call p { font-family: var(--display); font-variation-settings: 'SOFT' 50, 'opsz' 20; font-size: 17px; line-height: 1.4; }
+.call-options { display: grid; gap: 8px; margin-top: 10px; }
+.week { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 4px 0 6px; }
+.trust, .shelf { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; box-shadow: var(--shadow); }
+.trust .meterbar { height: 12px; }
+.shelf-items { display: flex; gap: 8px; flex-wrap: wrap; }
+.shelf-item2 { display: grid; justify-items: center; font-size: 24px; min-width: 44px; color: var(--line-strong); }
+.shelf-item2 small { font-size: 10px; font-family: var(--mono); color: var(--muted); max-width: 76px; text-align: center; line-height: 1.2; }
+.shelf-item2.got small { color: var(--text); }
+.save-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 26px; padding-top: 14px; border-top: 1px dashed var(--line-strong); }
+.save-tools .kicker { margin-right: auto; }
+.ps { font-family: var(--hand) !important; font-size: 20px !important; color: #5a4a26; margin-top: 8px !important; }
+.first-try { background: var(--note); border: 1px solid #d6bd4a; border-radius: 8px; padding: 8px 12px; font-weight: 700; text-align: center; }
+details.more { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px; }
+details.more > summary { font-weight: 700; padding: 6px 0; }

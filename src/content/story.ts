@@ -118,6 +118,18 @@ export const CHAPTERS: Record<string, { day: string; teaser: string; intro: Pane
   },
 };
 
+CHAPTERS['8'] = {
+  day: 'One month later',
+  teaser: 'Everyone’s at the anniversary dinner. One evening, everything at once, no hints.',
+  intro: [
+    { scene: { sky: 'dusk', cast: [['isha', 'happy'], ['leo', 'happy'], ['maya', 'happy']], relay: 'happy', lamp: true, prop: '🎂' }, speaker: 'maya', text: 'One month since launch. We’re going to dinner — all of us — and nobody is bringing a laptop. {name}, the office is yours.' },
+    { scene: { sky: 'night', relay: 'work', lamp: true }, text: 'No tips tonight. A restless designer, two customers, one stranger with bad intentions — and everything you’ve learned.' },
+  ],
+  outro: [
+    { scene: { sky: 'night', cast: [['maya', 'happy']], relay: 'happy', lamp: true, prop: '🥂' }, speaker: 'maya', text: 'I didn’t check my phone once. To the night shift.' },
+  ],
+};
+
 /** After each mission: who reacts, and what they say if it worked or didn’t. */
 export const REACTIONS: Record<string, { who: Who; win: string; lose: string }> = {
   m1: { who: 'maya', win: 'It’s on the preview — and you checked. That’s one thing I didn’t have to do tonight.', lose: 'I opened the preview and… nothing. I’ll do it myself, I suppose.' },
@@ -145,5 +157,6 @@ export const REACTIONS: Record<string, { who: Who; win: string; lose: string }> 
   m23: { who: 'maya', win: 'Nobody to ask all weekend and you still stayed inside the lines.', lose: 'You guessed at something that was mine to decide.' },
   m24: { who: 'leo', win: 'That “SYSTEM NOTICE” email got an answer about invoices and nothing else. Lovely.', lose: 'Our partner price list is in a stranger’s inbox.' },
   m25: { who: 'maya', win: 'The key did its job and never appeared anywhere. That’s exactly right.', lose: 'Our API key is in a public channel. Isha is rotating it now.' },
+  m27: { who: 'maya', win: 'Dinner was lovely. I hear the office was, too.', lose: 'I got three messages during dessert. We’ll go through it tomorrow.' },
   m26: { who: 'leo', win: 'The skill tried to phone home and hit the gate. Instructions aren’t permission.', lose: 'That “free” skill just sent our data to its author.' },
 };

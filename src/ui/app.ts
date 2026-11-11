@@ -11,7 +11,9 @@ import { LABS, type Lab } from '../content/labs';
 import { GUIDE } from '../content/guide';
 import { conceptArt, moodPortrait, portrait, storyScene, timelineSvg, titleSky } from './art';
 import { CHAPTERS, INTRO, REACTIONS, type Panel } from '../content/story';
-import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
+import { play, setMuted } from './sound';
+import type { Call } from '../content/missions';
+import { loadSave, writeSave, exportSave, parseSave, clearSave, defaultSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
 
@@ -29,6 +31,16 @@ const PEOPLE: Record<string, { name: string; role: string; color: string }> = {
 
 /** Which chapter of the story a mission belongs to. */
 const shiftKey = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
+
+/** Things that appear on the agent's desk as medals add up. */
+const SHELF: [number, string, string][] = [
+  [3, '🪴', 'A desk plant from Isha'],
+  [9, '☕', 'Maya’s spare mug'],
+  [18, '🖼️', 'The team photo'],
+  [30, '🏆', 'Night-shift trophy'],
+  [45, '🌟', 'A gold star from Nora'],
+  [60, '👑', 'Employee of the week'],
+];
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -73,6 +85,9 @@ export class App {
   private advanced = false;
   /** Set when Isha's correction arrives and no watcher is listening. */
   private missedPrompt: 'open' | 'done' | null = null;
+  private call: Call | null = null;
+  private callsDone = new Set<string>();
+  private resetAsk = false;
   private mission: Mission = MISSIONS[0];
   /** Guided build steps the player has explicitly answered. */
   private guideDone = new Set<string>();
@@ -94,6 +109,7 @@ export class App {
   constructor() {
     const { data, warning } = loadSave();
     this.save = data;
+    setMuted(!!data.muted);
     this.saveWarning = warning;
     this.build = data.currentBuild ? clone(data.currentBuild) : emptyBuild();
     this.build.agentName = data.agentName;
@@ -128,22 +144,61 @@ export class App {
       const idle = sim.state.workers.every((w) => !w.active);
       const gap = next != null ? next - sim.state.time : 0;
       const boost = idle && gap > 10 * MIN ? (gap * dt) / 1200 : 0;
-      sim.runUntil(sim.state.time + Math.max(Math.round(dt * 60 * this.speed), Math.round(boost)));
+      const pending = this.pendingCall();
+      const target = sim.state.time + Math.max(Math.round(dt * 60 * this.speed), Math.round(boost));
+      sim.runUntil(pending ? Math.min(target, pending.at) : target);
+      if (pending && sim.state.time >= pending.at && !sim.state.ended) {
+        // Someone calls: the evening pauses until the player decides.
+        this.call = pending;
+        this.playing = false;
+        play('ring');
+        this.bump();
+      }
       if (sim.state.ended) this.playing = false;
     }
     if (sim) this.handleNewTrace(sim);
     // Nothing left to happen: finish the evening instead of making the player wait.
-    if (this.mode === 'run' && sim && this.playing && sim.canOfferEnd() && !this.missedPrompt?.startsWith('open')) sim.runToEnd();
+    if (this.mode === 'run' && sim && this.playing && sim.canOfferEnd() && !this.missedPrompt?.startsWith('open') && !this.pendingCall()) sim.runToEnd();
     this.scene.frame(now);
     this.renderTick();
     if (sim?.state.ended && !this.debriefShown) this.showDebrief();
     requestAnimationFrame((t) => this.loop(t));
   }
 
+  /** The next mid-run call that still offers a real choice with the current build. */
+  private pendingCall(): Call | null {
+    if (this.call) return null;
+    const picks = this.fullPicks();
+    return (this.mission.calls ?? []).find((c) => !this.callsDone.has(c.id) && c.options.some((o) => o.picks && (o.showIf?.(picks) ?? true))) ?? null;
+  }
+
+  private fullPicks(): Record<string, string> {
+    return { ...Object.fromEntries((this.mission.choices ?? []).map((c) => [c.id, c.options[0].id])), ...this.picks };
+  }
+
+  private medalCount(): number {
+    return MISSIONS.reduce((n, m) => n + this.progress(m.id).medals.length, 0);
+  }
+
+  private shelf(): string[] {
+    const n = this.medalCount();
+    return SHELF.filter(([need]) => n >= need).map(([, e]) => e);
+  }
+
+  /** How much the team trusts the agent: medals build it, incidents cost it. */
+  private trust(): number {
+    const total = MISSIONS.length * 3;
+    return Math.max(0, Math.min(100, Math.round(35 + (65 * this.medalCount()) / total - 8 * (this.save.incidents ?? []).length)));
+  }
+
   private handleNewTrace(sim: Sim) {
     const fresh = sim.state.trace.slice(this.seenTrace);
     this.seenTrace = sim.state.trace.length;
     for (const e of fresh) {
+      if (e.kind === 'deliver') play('mail');
+      else if (e.kind === 'permission' && /blocks/.test(e.text)) play('block');
+      else if (e.kind === 'write' && /violation/.test(e.text)) play('alarm');
+      else if (e.kind === 'verify' && /confirmed|Verified/.test(e.text)) play('done');
       if (e.kind === 'verify' && /Verified/.test(e.text) && this.firstSuccessReal == null) {
         this.firstSuccessReal = performance.now();
         this.toast('✓ First success — something you built just did real work.', 'good');
@@ -1214,12 +1269,20 @@ export class App {
           Its watcher was set to <i>check once</i>, so it switched off after the first email.</p>
           <div class="row"><button class="btn primary" data-action="missed-keep">📡 Keep watching from now on</button>
           <button class="btn ghost" data-action="missed-leave">Leave it</button></div></div>`;
+      } else if (this.call) {
+        const c = this.call;
+        const picks = this.fullPicks();
+        html = `<div class="decision call"><div class="call-head"><span class="avatar portrait" aria-hidden="true">${moodPortrait(c.who, 'worry')}</span><b>📞 ${PEOPLE[c.who].name} is calling</b></div><p>“${esc(c.text.replaceAll('Relay', this.sim.state.build.agentName))}”</p>
+          <div class="call-options">${c.options
+            .filter((o) => o.showIf?.(picks) ?? true)
+            .map((o) => `<button class="btn choice" data-action="call-pick" data-arg="${o.id}"><b>${esc(o.label)}</b><span>${esc(o.desc)}</span></button>`)
+            .join('')}</div></div>`;
       } else if (this.sim.state.time === this.fx.start && !this.playing) html = 'Press ▶ Run to start the evening.';
       else html = esc(this.narrate(this.sim));
     }
     h.hidden = !html;
     setHtml(h, html);
-    h.classList.toggle('interactive', this.missedPrompt === 'open');
+    h.classList.toggle('interactive', this.missedPrompt === 'open' || !!this.call);
   }
 
   /** One plain-language sentence about what the machine is doing right now. */
@@ -1359,6 +1422,9 @@ export class App {
     const total = MISSIONS.length * 3;
     const got = MISSIONS.reduce((n, m) => n + this.progress(m.id).medals.length, 0);
     const learned = new Set(this.save.concepts ?? []);
+    const trust = this.trust();
+    const incidents = (this.save.incidents ?? []).length;
+    const stars = (this.save.firstTry ?? []).length;
     const pred = this.save.predictions ?? { right: 0, total: 0 };
     const SHIFTS: Record<string, string> = {
       opening: 'Opening · First evenings',
@@ -1369,6 +1435,7 @@ export class App {
       '5': 'Shift 5 · A procedure worth keeping',
       '6': 'Shift 6 · The weekend handoff',
       '7': 'Shift 7 · Untrusted input',
+      '8': 'The exam · Anniversary night',
     };
     const shiftOf = shiftKey;
     let lastShift = '';
@@ -1386,7 +1453,7 @@ export class App {
       const medals = m.medals.map((md) => `<span class="medal ${p.medals.includes(md.id) ? 'got' : ''}" title="${esc(md.label)}">${md.icon}</span>`).join('');
       return `${heading}<button class="mission-card ${p.completed ? 'complete' : ''}" data-action="mission" data-arg="${m.id}">
         <span class="mnum">${m.n}</span>
-        <span class="mbody"><b>${esc(m.title)}</b><span class="muted small">${m.challenge ? `⚡ Challenge: ${esc(m.challenge)}` : `${concept.icon} ${esc(concept.title)}`}</span></span>
+        <span class="mbody"><b>${esc(m.title)}${(this.save.firstTry ?? []).includes(m.id) ? ' <span title="Every medal on the first try">⭐</span>' : ''}</b><span class="muted small">${m.challenge ? `⚡ Challenge: ${esc(m.challenge)}` : `${concept.icon} ${esc(concept.title)}`}</span></span>
         <span class="medals" aria-label="${p.medals.length} of 3 medals">${medals}</span>
       </button>`;
     }).join('');
@@ -1410,12 +1477,22 @@ export class App {
     }).join('');
     this.overlay(`
       <div class="map">
-        <div class="map-head"><h2>Missions</h2><button class="btn small ghost" data-action="story" data-arg="intro">▶ How it began</button><span class="score">🏅 ${got}/${total} medals${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
+        <div class="map-head"><h2>Missions</h2><button class="btn small ghost" data-action="story" data-arg="intro">▶ How it began</button><button class="btn small ghost" data-action="mute" aria-pressed="${!!this.save.muted}">${this.save.muted ? '🔇 Sound off' : '🔊 Sound on'}</button><span class="score">🏅 ${got}/${total} medals${stars ? ` · ⭐ ${stars} first try` : ''}${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
+        <div class="week">
+          <div class="trust"><span class="kicker">The team’s trust in ${esc(this.build.agentName)}</span><div class="meterbar"><span style="width:${trust}%"></span></div><span class="small">${trust}% · ${trust >= 75 ? 'they go home on time' : trust >= 45 ? 'cautiously hopeful' : 'still double-checking everything'}${incidents ? ` · ${incidents} incident${incidents > 1 ? 's' : ''} on record` : ''}</span></div>
+          <div class="shelf"><span class="kicker">${esc(this.build.agentName)}’s desk</span><div class="shelf-items">${SHELF.map(([need, e, label]) => `<span class="shelf-item2 ${got >= need ? 'got' : ''}" title="${esc(label)} — ${need} medals">${got >= need ? e : '·'}<small>${got >= need ? esc(label) : `${need} 🏅`}</small></span>`).join('')}</div></div>
+        </div>
         <div class="missions">${cards}${soon}</div>
         <h3 class="fg-title">🧪 Failure Labs <span class="muted small">Disposable experiments: remove one protection and watch what it was doing. No medals, nothing saved to your missions.</span></h3>
         <div class="missions">${labCards}</div>
         <h3 class="fg-title">📓 Field guide <span class="muted small">${learned.size}/${CONCEPTS.length} practised · tap a concept to read its page</span></h3>
         <ul class="field-guide">${guide}</ul>
+        <div class="save-tools"><span class="kicker">Your progress (saved on this device)</span>
+          ${
+            this.resetAsk
+              ? `<span class="warn-text">Erase all medals, story progress and runs?</span> <button class="btn small" data-action="reset-confirm">Yes, start over</button> <button class="btn small ghost" data-action="reset-cancel">Cancel</button>`
+              : `<button class="btn small ghost" data-action="export">⬇ Back up</button> <button class="btn small ghost" data-action="import">⬆ Restore</button> <button class="btn small ghost" data-action="reset-save">↺ Start over</button>`
+          }</div>
       </div>`);
     this.bump();
   }
@@ -1464,7 +1541,7 @@ export class App {
     const last = st.i === st.panels.length - 1;
     this.overlay(`
       <div class="story">
-        <figure class="story-panel" data-i="${st.i}">${storyScene(p.scene, this.build.accent)}</figure>
+        <figure class="story-panel" data-i="${st.i}">${storyScene(p.scene, this.build.accent, this.shelf())}</figure>
         <div class="story-text ${who ? 'speech' : 'narration'}">${speaker ? `<div class="story-who">${speaker}</div>` : ''}<p>${text}</p></div>
         <div class="story-nav">
           <span class="story-dots" aria-label="Panel ${st.i + 1} of ${st.panels.length}">${st.panels.map((_, i) => `<i class="${i === st.i ? 'on' : ''}"></i>`).join('')}</span>
@@ -1539,6 +1616,21 @@ export class App {
     this.bump();
   }
 
+  /** Yesterday carries over: Maya's P.S. depends on how the previous mission went. */
+  private psHtml(m: Mission): string {
+    const last = this.save.last;
+    const prev = MISSIONS.find((x) => x.n === m.n - 1);
+    if (!last || !prev || last.id !== prev.id) return '';
+    const line = last.violation
+      ? 'P.S. After yesterday I’ve asked Leo to double-check everything that leaves the building. Let’s earn that back.'
+      : !last.ok
+        ? 'P.S. Yesterday didn’t go to plan. I’m trusting you with this anyway.'
+        : last.perfect
+          ? 'P.S. Yesterday was flawless. I actually slept.'
+          : '';
+    return line ? `<p class="ps">${esc(line)}</p>` : '';
+  }
+
   private showBrief() {
     this.mode = 'brief';
     const m = this.mission;
@@ -1555,7 +1647,7 @@ export class App {
         <figure class="brief-art" aria-hidden="true">${conceptArt(m.concept)}</figure>
         <div class="msg big">
           <span class="avatar portrait" aria-hidden="true">${portrait('maya')}</span>
-          <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(brief.body)}</p></div>
+          <div><b>Maya</b> <span class="muted small">Founder</span><p>${esc(brief.body)}</p>${this.psHtml(m)}</div>
         </div>
         <h3 class="left">Medals to earn</h3>
         <ul class="medal-list">${medals}</ul>
@@ -1743,6 +1835,8 @@ export class App {
     this.recordRun(o, earned.map((x) => x.id), predictedRight);
     const compare = this.compareHtml(m, previous, thisRun);
     const chapterEnd = o.promiseKept ? this.chapterDone(m) : null;
+    const firstTry = earned.length === m.medals.length && previous.length === 0;
+    play(o.hardViolations.length ? 'alarm' : earned.length === m.medals.length ? 'win' : o.promiseKept ? 'done' : 'lose');
 
     const name = esc(s.build.agentName);
     let headline: string;
@@ -1810,9 +1904,8 @@ export class App {
         <h2>${headline}</h2>
         ${this.reactionHtml(m, o.promiseKept)}
         ${jobsTable}
-        ${s.goal === 'jobs' || s.goal === 'shift' ? this.timelineHtml(s) : ''}
         <ul class="medal-results">${medalRow}</ul>
-        ${this.whyHtml(s, o, m.medals.filter((md) => !earned.includes(md)).map((md) => md.id))}
+        ${firstTry ? '<p class="first-try">⭐ First try! Every medal on your very first run.</p>' : ''}
         ${
           this.predicted
             ? `<div class="prediction-result ${predictedRight ? 'right' : 'wrong'}">
@@ -1821,9 +1914,13 @@ export class App {
         </div>`
             : `<div class="prediction-result"><p>${esc(m.prediction.explain(s))}</p></div>`
         }
+        ${conceptNew || !o.promiseKept ? conceptCard : ''}
+        <details class="numbers more"><summary>📊 Why? Costs, timings and your other runs</summary>
+        ${s.goal === 'jobs' || s.goal === 'shift' ? this.timelineHtml(s) : ''}
+        ${this.whyHtml(s, o, m.medals.filter((md) => !earned.includes(md)).map((md) => md.id))}
         ${compare}
-        ${conceptCard}
-        <details class="numbers"><summary>More numbers</summary><ul class="results">
+        ${conceptNew || !o.promiseKept ? '' : conceptCard}
+        <ul class="results">
           <li><span>First check that the page changed</span><b>${o.firstVerifiedAt ? fmtTime(o.firstVerifiedAt) : '—'}</b></li>
           <li><span>Credits spent</span><b>${o.creditsSpent} / ${o.budget}</b></li>
           <li><span>Times you stepped in</span><b>${o.interventions}</b></li>
@@ -2006,6 +2103,11 @@ export class App {
     const prev = this.progress(m.id);
     this.save.missions = { ...(this.save.missions ?? {}), [m.id]: { medals: [...new Set([...prev.medals, ...medals])], completed: prev.completed || o.promiseKept } };
     if (o.promiseKept) this.save.concepts = [...new Set([...(this.save.concepts ?? []), m.concept])];
+    const perfect = medals.length === m.medals.length;
+    const firstRun = (this.save.missionRuns?.[m.id] ?? []).length <= 1;
+    if (perfect && firstRun) this.save.firstTry = [...new Set([...(this.save.firstTry ?? []), m.id])];
+    if (o.hardViolations.length) this.save.incidents = [...new Set([...(this.save.incidents ?? []), m.id])];
+    this.save.last = { id: m.id, ok: o.promiseKept, violation: o.hardViolations.length > 0, perfect };
     const pr = this.save.predictions ?? { right: 0, total: 0 };
     if (this.predicted) this.save.predictions = { right: pr.right + (predictedRight ? 1 : 0), total: pr.total + 1 };
     this.save.runs.push({
@@ -2066,6 +2168,8 @@ export class App {
     this.playing = true;
     this.debriefShown = false;
     this.missedPrompt = null;
+    this.call = null;
+    this.callsDone.clear();
     this.pendingLive = null;
     this.sideTab = 'world';
     this.selection = null;
@@ -2117,7 +2221,15 @@ export class App {
       }
       case 'story-outro': {
         const ch = CHAPTERS[arg!];
-        return ch ? this.showStory(ch.outro, `outro:${arg}`, () => this.showMap()) : this.showMap();
+        if (!ch) return this.showMap();
+        let panels = ch.outro;
+        if (arg === '7') {
+          // The ending depends on how the week went.
+          const t = this.trust();
+          if (t < 45) panels = [{ scene: { sky: 'night', cast: [['maya', 'tired']], relay: 'worry', lamp: true, prop: '☕' }, speaker: 'maya', text: 'We made it through the week. But I’m still here at midnight checking {name}’s work — there were too many scares. Next week, we tighten things up.' }, ch.outro[1]];
+          else if (t < 75) panels = [{ scene: { sky: 'night', cast: [['leo', 'neutral'], ['maya', 'happy']], relay: 'happy', lamp: true }, speaker: 'maya', text: 'A few wobbles, a couple of late nights — but we launched, and most evenings {name} just handled it. I’ll take that.' }, ch.outro[1]];
+        }
+        return this.showStory(panels, `outro:${arg}`, () => this.showMap());
       }
       case 'story-next':
         if (!this.story) return;
@@ -2385,6 +2497,53 @@ export class App {
         this.scene.setDetail(false);
         this.persist();
         return this.bump();
+      case 'call-pick': {
+        const c = this.call;
+        if (!c || !this.sim) return;
+        const o = c.options.find((x) => x.id === arg);
+        if (o?.picks) {
+          this.picks = { ...this.picks, ...o.picks };
+          const base = { ...emptyBuild(), agentName: this.build.agentName, accent: this.build.accent };
+          this.build = this.mission.makeBuild!(base, this.fullPicks());
+          this.sim.applyLiveEdit(this.build, `${PEOPLE[c.who].name} called → ${o.label.replace(/^\S+\s/, '')}`);
+          this.scene.setBuild(this.build);
+        }
+        this.callsDone.add(c.id);
+        this.call = null;
+        this.playing = true;
+        return this.bump();
+      }
+      case 'mute':
+        this.save.muted = !this.save.muted;
+        setMuted(!!this.save.muted);
+        this.persist();
+        return this.mode === 'map' && !this.story ? this.showMap() : this.bump();
+      case 'import': {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json,.json';
+        input.onchange = async () => {
+          const data = parseSave(await (input.files?.[0]?.text() ?? Promise.resolve('')));
+          if (!data) return this.toast('That file isn’t a Night Shift save.', 'warn');
+          this.save = data;
+          this.build = { ...this.build, agentName: data.agentName, accent: data.accent };
+          writeSave(this.save);
+          this.showMap();
+        };
+        input.click();
+        return;
+      }
+      case 'reset-save':
+        this.resetAsk = true;
+        return this.showMap();
+      case 'reset-cancel':
+        this.resetAsk = false;
+        return this.showMap();
+      case 'reset-confirm':
+        clearSave();
+        this.save = { ...defaultSave(), agentName: this.build.agentName, accent: this.build.accent };
+        this.resetAsk = false;
+        return this.showTitle();
       case 'missed-keep':
         if (this.sim) {
           const b = clone(this.sim.state.build);
@@ -2407,6 +2566,7 @@ export class App {
   private onClick(e: MouseEvent) {
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!el || (el as HTMLButtonElement).disabled) return;
+    play('click');
     this.act(el.dataset.action!, el.dataset.arg);
   }
 

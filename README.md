@@ -118,6 +118,19 @@ The same engine powers interactive play and the headless tests.
   mission (different for success and failure), and a closing scene when a shift is finished.
   The agent is a character too: the old monitor in the corner, with a face that sleeps, works,
   worries and smiles. Scenes play once and can be replayed from the map.
+- **Game feel**
+  - *Mid-run calls*: on some missions the evening pauses and a teammate phones with a warning; your
+    answer changes the build from that moment on (missions 24 and 26).
+  - *Mission 27 — the exam*: one evening mixing machine choice, update policy, prompt injection and
+    tool scope, with no hints.
+  - *⭐ First try*: every medal on the very first run of a mission.
+  - *Consequences*: a trust meter (medals raise it, violations lower it), Maya’s P.S. in the next
+    brief, and three endings depending on trust.
+  - *Desk unlocks*: items appear on the agent’s desk (and in story scenes) as medals add up.
+  - *Sound*: small synthesised effects, with a mute switch.
+  - *Results page*: headline, reaction, medals and prediction first; costs, timeline and run
+    comparison behind “Why?”.
+  - *Save tools*: back up, restore and start over, at the bottom of the map.
 - **Visual theme — “Desk”**: an office desk at night. Walnut wood for the app frame, paper sheets
   and index cards for panels, manila folder tabs for shifts, sticky notes for hints and
   predictions, label-maker tags on the 3D board (green desk blotters on a wooden desk), and

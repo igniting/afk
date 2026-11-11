@@ -33,6 +33,13 @@ export interface SaveData {
   labs?: Record<string, string[]>;
   /** Story scenes already shown (so they play once; they can be replayed from the map). */
   storySeen?: string[];
+  /** Missions where everything was earned on the very first run. */
+  firstTry?: string[];
+  /** Missions that ended in a hard violation at least once (the team remembers). */
+  incidents?: string[];
+  /** How the most recent mission went, for the next brief's P.S. */
+  last?: { id: string; ok: boolean; violation: boolean; perfect: boolean };
+  muted?: boolean;
 }
 
 export interface MissionRun {
@@ -58,6 +65,25 @@ export function loadSave(): { data: SaveData; warning: string | null } {
     return { data: { ...defaultSave(), ...parsed }, warning: null };
   } catch {
     return { data: defaultSave(), warning: null };
+  }
+}
+
+/** Read a save file the player exported earlier. Returns null if it isn't one. */
+export function parseSave(text: string): SaveData | null {
+  try {
+    const parsed = JSON.parse(text) as Partial<SaveData>;
+    if (parsed.schema !== SAVE_SCHEMA || typeof parsed.agentName !== 'string') return null;
+    return { ...defaultSave(), ...parsed };
+  } catch {
+    return null;
+  }
+}
+
+export function clearSave() {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* nothing to clear */
   }
 }
 
