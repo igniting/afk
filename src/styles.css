@@ -669,3 +669,27 @@ input[type='text']:focus { border-color: var(--brand); outline: none; box-shadow
 .medal-list h3, h3.left { font-size: 17px; }
 svg.timeline { background: none; border: 0; box-shadow: none; color: inherit; }
 @media (max-width: 900px) { .lbl { font-size: 10px; padding: 1px 4px; } .board-hint { font-size: 17px; } }
+
+/* ---------- Story ---------- */
+.sheet:has(.story) { width: min(720px, 100%); padding: 14px; background: var(--panel); }
+.story-panel { margin: 0; border: 3px solid #2e2016; border-radius: 4px; overflow: hidden; line-height: 0; box-shadow: 4px 5px 0 rgba(20, 12, 6, .3); animation: story-in .35s ease-out; }
+@keyframes story-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.story-text { margin: 14px 4px 6px; min-height: 96px; }
+.story-text p { font-family: var(--display); font-variation-settings: 'SOFT' 50, 'opsz' 24; font-size: 20px; line-height: 1.4; margin: 6px 0 0; }
+.story-text.narration p { font-style: italic; color: #4a4033; text-align: center; padding: 8px 12px; }
+.story-text.speech { background: var(--panel-2); border: 2px solid #2e2016; border-radius: 14px; padding: 10px 14px; position: relative; }
+.story-text.speech::before { content: ''; position: absolute; top: -12px; left: 46px; border: 6px solid transparent; border-bottom-color: #2e2016; }
+.story-who { display: flex; align-items: center; gap: 8px; }
+.relay-avatar { background: #221812; font-size: 17px; }
+.story-nav { display: flex; align-items: center; gap: 8px; margin: 10px 4px 2px; }
+.story-dots { display: flex; gap: 6px; margin-right: auto; }
+.story-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); }
+.story-dots i.on { background: var(--brand); }
+.reaction { display: grid; grid-template-columns: 52px 1fr; gap: 12px; align-items: center; background: var(--panel-2); border: 2px solid var(--line-strong); border-radius: 14px; padding: 10px 14px; margin: 8px 0 12px; text-align: left; }
+.reaction .avatar { width: 52px; height: 52px; }
+.reaction p { font-family: var(--display); font-variation-settings: 'SOFT' 50, 'opsz' 20; font-size: 17.5px; line-height: 1.4; margin: 2px 0 0; }
+.reaction.good { border-color: #9ccdb4; background: #f3faf5; }
+.reaction.bad { border-color: #dcc07a; background: #fff8dc; }
+.sb-teaser { margin: 4px 0 8px; color: #5a4a26; font-size: 14.5px; }
+.sb-text .btn.small { min-height: 30px; padding: 2px 10px; }
+@media (max-width: 640px) { .story-text p { font-size: 18px; } .sb-teaser { font-size: 13.5px; } }

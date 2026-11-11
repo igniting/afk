@@ -9,7 +9,8 @@ import { CONCEPTS, COMING_SOON, type ConceptId, setApproval, setRecovery, shiftB
 import { MISSIONS } from '../content/all';
 import { LABS, type Lab } from '../content/labs';
 import { GUIDE } from '../content/guide';
-import { conceptArt, portrait, timelineSvg, titleSky } from './art';
+import { conceptArt, moodPortrait, portrait, storyScene, timelineSvg, titleSky } from './art';
+import { CHAPTERS, INTRO, REACTIONS, type Panel } from '../content/story';
 import { loadSave, writeSave, exportSave, type MissionRun, type SaveData } from '../persistence/save';
 import { BoardScene, type Target } from './scene';
 import { logoSvg } from './logo';
@@ -25,6 +26,9 @@ const PEOPLE: Record<string, { name: string; role: string; color: string }> = {
   leo: { name: 'Leo', role: 'Engineer', color: '#38bdf8' },
   nora: { name: 'Nora', role: 'Partner', color: '#a3e635' },
 };
+
+/** Which chapter of the story a mission belongs to. */
+const shiftKey = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -1366,7 +1370,7 @@ export class App {
       '6': 'Shift 6 · The weekend handoff',
       '7': 'Shift 7 · Untrusted input',
     };
-    const shiftOf = (m: Mission) => (m.shiftNo ? String(m.shiftNo) : m.n <= 4 ? 'opening' : '1');
+    const shiftOf = shiftKey;
     let lastShift = '';
     const cards = MISSIONS.map((m) => {
       const p = this.progress(m.id);
@@ -1375,7 +1379,7 @@ export class App {
       const [shName, shTitle] = SHIFTS[sh].split(' · ');
       const heading =
         sh !== lastShift
-          ? `<div class="shift-banner"><div class="sb-art" aria-hidden="true">${conceptArt(m.concept)}</div><div class="sb-text"><span class="kicker">${esc(shName)}</span><h3>${esc(shTitle)}</h3></div></div>`
+          ? `<div class="shift-banner"><div class="sb-art" aria-hidden="true">${conceptArt(m.concept)}</div><div class="sb-text"><span class="kicker">${esc(shName)} · ${esc(CHAPTERS[sh].day)}</span><h3>${esc(shTitle)}</h3><p class="sb-teaser">${esc(CHAPTERS[sh].teaser)}</p><button class="btn small" data-action="story" data-arg="${sh}">▶ Story</button></div></div>`
           : '';
       lastShift = sh;
       const concept = CONCEPTS.find((c) => c.id === m.concept)!;
@@ -1406,7 +1410,7 @@ export class App {
     }).join('');
     this.overlay(`
       <div class="map">
-        <div class="map-head"><h2>Missions</h2><span class="score">🏅 ${got}/${total} medals${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
+        <div class="map-head"><h2>Missions</h2><button class="btn small ghost" data-action="story" data-arg="intro">▶ How it began</button><span class="score">🏅 ${got}/${total} medals${pred.total ? ` · 🔮 ${pred.right}/${pred.total} predictions` : ''}</span></div>
         <div class="missions">${cards}${soon}</div>
         <h3 class="fg-title">🧪 Failure Labs <span class="muted small">Disposable experiments: remove one protection and watch what it was doing. No medals, nothing saved to your missions.</span></h3>
         <div class="missions">${labCards}</div>
@@ -1414,6 +1418,76 @@ export class App {
         <ul class="field-guide">${guide}</ul>
       </div>`);
     this.bump();
+  }
+
+  // -------------------------------------------------------------------------
+  // Story
+
+  private story: { panels: Panel[]; i: number; done: () => void } | null = null;
+
+  private seen(key: string): boolean {
+    return (this.save.storySeen ?? []).includes(key);
+  }
+
+  private showStory(panels: Panel[], markSeen: string | null, done: () => void) {
+    if (markSeen && !this.seen(markSeen)) {
+      this.save.storySeen = [...(this.save.storySeen ?? []), markSeen];
+      this.persist();
+    }
+    this.mode = 'map';
+    this.sim = null;
+    this.scene.setSim(null);
+    this.playing = false;
+    this.story = { panels, i: 0, done };
+    this.renderStory();
+  }
+
+  private endStory() {
+    const done = this.story?.done;
+    this.story = null;
+    done?.();
+  }
+
+  private renderStory() {
+    const st = this.story;
+    if (!st) return;
+    const p = st.panels[st.i];
+    const name = this.build.agentName;
+    const text = esc(p.text.replaceAll('{name}', name));
+    const who = p.speaker;
+    const speaker =
+      who === 'relay'
+        ? `<span class="avatar relay-avatar" aria-hidden="true">🖥️</span><b>${esc(name)}</b>`
+        : who
+          ? `<span class="avatar portrait" aria-hidden="true">${portrait(who)}</span><b>${PEOPLE[who].name}</b> <span class="muted small">${PEOPLE[who].role}</span>`
+          : '';
+    const last = st.i === st.panels.length - 1;
+    this.overlay(`
+      <div class="story">
+        <figure class="story-panel" data-i="${st.i}">${storyScene(p.scene, this.build.accent)}</figure>
+        <div class="story-text ${who ? 'speech' : 'narration'}">${speaker ? `<div class="story-who">${speaker}</div>` : ''}<p>${text}</p></div>
+        <div class="story-nav">
+          <span class="story-dots" aria-label="Panel ${st.i + 1} of ${st.panels.length}">${st.panels.map((_, i) => `<i class="${i === st.i ? 'on' : ''}"></i>`).join('')}</span>
+          ${st.i > 0 ? '<button class="btn ghost" data-action="story-back">Back</button>' : ''}
+          ${last ? '' : '<button class="btn ghost" data-action="story-skip">Skip</button>'}
+          <button class="btn primary" data-action="story-next" autofocus>${last ? 'Continue' : 'Next →'}</button>
+        </div>
+      </div>`);
+    this.bump();
+  }
+
+  /** A character's reaction to how the mission went, and the chapter ending when a shift is finished. */
+  private reactionHtml(m: Mission, ok: boolean): string {
+    const r = REACTIONS[m.id];
+    if (!r) return '';
+    const line = esc((ok ? r.win : r.lose).replaceAll('{name}', this.build.agentName));
+    return `<div class="reaction ${ok ? 'good' : 'bad'}"><span class="avatar portrait" aria-hidden="true">${moodPortrait(r.who, ok ? 'happy' : 'worry')}</span><div><b>${PEOPLE[r.who].name}</b><p>“${line}”</p></div></div>`;
+  }
+
+  private chapterDone(m: Mission): string | null {
+    const sh = shiftKey(m);
+    const all = MISSIONS.filter((x) => shiftKey(x) === sh && !x.challenge).every((x) => this.progress(x.id).completed);
+    return all && !this.seen(`outro:${sh}`) ? sh : null;
   }
 
   private startMission(id: string) {
@@ -1668,6 +1742,7 @@ export class App {
     this.save.missionRuns = { ...(this.save.missionRuns ?? {}), [m.id]: [...previous, thisRun].slice(-10) };
     this.recordRun(o, earned.map((x) => x.id), predictedRight);
     const compare = this.compareHtml(m, previous, thisRun);
+    const chapterEnd = o.promiseKept ? this.chapterDone(m) : null;
 
     const name = esc(s.build.agentName);
     let headline: string;
@@ -1733,6 +1808,7 @@ export class App {
           <div class="pg-body">${logoSvg(heroRev, 72)}<div><div class="pg-title">Lumen</div><div class="muted small">${liveGoal ? (s.world.live.changedBy ? 'Live now' : 'Coming soon') : tagline}</div></div></div></div>
         </div>${s.goal === 'jobs' ? '-->' : ''}
         <h2>${headline}</h2>
+        ${this.reactionHtml(m, o.promiseKept)}
         ${jobsTable}
         ${s.goal === 'jobs' || s.goal === 'shift' ? this.timelineHtml(s) : ''}
         <ul class="medal-results">${medalRow}</ul>
@@ -1756,7 +1832,9 @@ export class App {
         <div class="choices">
           <button class="btn choice" data-action="change-build"><b>↺ Try again</b><span>Keep your build, change one thing.</span></button>
           ${
-            next && o.promiseKept
+            chapterEnd
+              ? `<button class="btn choice primary-choice" data-action="story-outro" data-arg="${chapterEnd}"><b>📖 Continue the story →</b><span>${esc(CHAPTERS[chapterEnd].day)} is done.</span></button>`
+              : next && o.promiseKept
               ? `<button class="btn choice primary-choice" data-action="next-mission"><b>Next mission →</b><span>${esc(next.title)}</span></button>`
               : next
                 ? `<button class="btn choice" data-action="next-mission"><b>Skip to next →</b><span>${esc(next.title)}</span></button>`
@@ -2030,8 +2108,26 @@ export class App {
         const name = ($('agent-name') as HTMLInputElement | null)?.value.trim();
         if (name) this.build.agentName = name;
         this.persist();
+        if (!this.seen('intro')) return this.showStory(INTRO, 'intro', () => this.showMap());
         return this.showMap();
       }
+      case 'story': {
+        const ch = arg === 'intro' ? null : CHAPTERS[arg!];
+        return this.showStory(ch ? ch.intro : INTRO, null, () => this.showMap());
+      }
+      case 'story-outro': {
+        const ch = CHAPTERS[arg!];
+        return ch ? this.showStory(ch.outro, `outro:${arg}`, () => this.showMap()) : this.showMap();
+      }
+      case 'story-next':
+        if (!this.story) return;
+        if (++this.story.i >= this.story.panels.length) return this.endStory();
+        return this.renderStory();
+      case 'story-back':
+        if (this.story && this.story.i > 0) this.story.i--;
+        return this.renderStory();
+      case 'story-skip':
+        return this.endStory();
       case 'begin-build':
         this.buildStartedReal = performance.now();
         return this.toBuild();
@@ -2263,11 +2359,19 @@ export class App {
         this.applyChoices();
         return this.toBuild();
       }
-      case 'mission':
+      case 'mission': {
+        // The first time a chapter is opened, its story scene plays before the brief.
+        const m = MISSIONS.find((x) => x.id === arg);
+        const sh = m ? shiftKey(m) : null;
+        if (sh && !this.seen(`intro:${sh}`)) return this.showStory(CHAPTERS[sh].intro, `intro:${sh}`, () => this.startMission(arg!));
         return this.startMission(arg!);
+      }
       case 'next-mission': {
         const next = MISSIONS.find((m) => m.n === this.mission.n + 1);
-        return next ? this.startMission(next.id) : this.showMap();
+        if (!next) return this.showMap();
+        const sh = shiftKey(next);
+        if (!this.seen(`intro:${sh}`)) return this.showStory(CHAPTERS[sh].intro, `intro:${sh}`, () => this.startMission(next.id));
+        return this.startMission(next.id);
       }
       case 'advanced':
         this.advanced = true;

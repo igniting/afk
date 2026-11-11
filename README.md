@@ -113,6 +113,11 @@ The same engine powers interactive play and the headless tests.
     idea in real AI agents, key terms, and links to the missions and labs that practise it.
   - Illustrations drawn as inline SVG (`src/ui/art.ts`): a diagram per concept (concept pages,
     mission briefs, shift banners), portraits of the cast, and a per-worker run timeline in debriefs.
+- **Story** (`src/content/story.ts`): one launch week at Lumen, told in illustrated panels — an
+  intro, a scene before each shift (Monday → the week after), a character’s reaction after every
+  mission (different for success and failure), and a closing scene when a shift is finished.
+  The agent is a character too: the old monitor in the corner, with a face that sleeps, works,
+  worries and smiles. Scenes play once and can be replayed from the map.
 - **Visual theme — “Desk”**: an office desk at night. Walnut wood for the app frame, paper sheets
   and index cards for panels, manila folder tabs for shifts, sticky notes for hints and
   predictions, label-maker tags on the 3D board (green desk blotters on a wooden desk), and

@@ -31,6 +31,8 @@ export interface SaveData {
   missionRuns?: Record<string, MissionRun[]>;
   /** Failure Labs: which versions ('on' / 'off') the player has run. */
   labs?: Record<string, string[]>;
+  /** Story scenes already shown (so they play once; they can be replayed from the map). */
+  storySeen?: string[];
 }
 
 export interface MissionRun {

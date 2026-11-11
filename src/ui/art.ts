@@ -354,3 +354,114 @@ export function titleSky(accent: string): string {
     <rect x="40" y="170" width="46" height="5" rx="2" fill="#e0a526" transform="rotate(-8 63 172)"/>
   </svg>`;
 }
+
+// Story scenes ------------------------------------------------------------------------
+import type { Mood, RelayMood, Scene } from '../content/story';
+
+function face(mood: Mood): string {
+  const eyes =
+    mood === 'tired'
+      ? `<path d="M24.5 30 h5 M34.5 30 h5" stroke="#1f2937" stroke-width="1.8" stroke-linecap="round"/><path d="M24 33.5 q2.5 1.5 5 0 M35 33.5 q2.5 1.5 5 0" stroke="#00000033" stroke-width="1.5" fill="none"/>`
+      : `<circle cx="27" cy="30" r="1.9" fill="#1f2937"/><circle cx="37" cy="30" r="1.9" fill="#1f2937"/>`;
+  const brows = mood === 'worry' ? `<path d="M23.5 25.5 l6 -1.8 M40.5 25.5 l-6 -1.8" stroke="#1f2937" stroke-width="1.5" stroke-linecap="round"/>` : '';
+  const mouth =
+    mood === 'happy'
+      ? `<path d="M26 35.5 Q32 41.5 38 35.5 Z" fill="#7c2d12"/>`
+      : mood === 'worry'
+        ? `<path d="M27 38.5 Q32 35 37 38.5" stroke="#7c2d12" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
+        : `<path d="M28 37.5 h8" stroke="#7c2d12" stroke-width="1.8" stroke-linecap="round"/>`;
+  return eyes + brows + mouth;
+}
+
+function person(who: string, mood: Mood): string {
+  const p = CAST[who] ?? CAST.maya;
+  const hair = {
+    bun: `<circle cx="32" cy="12" r="8" fill="${p.hair}"/><path d="M15 30 Q16 13 32 13 Q48 13 49 30 Q44 20 32 20 Q20 20 15 30Z" fill="${p.hair}"/>`,
+    long: `<path d="M13 46 Q10 14 32 12 Q54 14 51 46 L46 46 Q47 24 32 21 Q17 24 18 46Z" fill="${p.hair}"/>`,
+    short: `<path d="M16 28 Q15 12 32 11 Q49 12 48 28 Q46 18 32 19 Q19 18 16 28Z" fill="${p.hair}"/>`,
+    curly: `${[16, 22, 28, 34, 40, 46].map((x, i) => `<circle cx="${x}" cy="${16 + (i % 2) * 3}" r="7" fill="${p.hair}"/>`).join('')}<circle cx="14" cy="26" r="6" fill="${p.hair}"/><circle cx="50" cy="26" r="6" fill="${p.hair}"/>`,
+  }[p.style];
+  return `<path d="M6 80 Q8 46 32 46 Q56 46 58 80Z" fill="${p.shirt}"/><rect x="28" y="38" width="8" height="10" fill="${p.skin}"/><ellipse cx="32" cy="29" rx="13" ry="15" fill="${p.skin}"/>${hair}${face(mood)}`;
+}
+
+/** A portrait with an expression, for reactions. */
+export function moodPortrait(who: string, mood: Mood): string {
+  const p = CAST[who] ?? CAST.maya;
+  return `<svg viewBox="0 0 64 64" class="portrait-svg" xmlns="http://www.w3.org/2000/svg"><circle cx="32" cy="32" r="32" fill="${p.shirt}" opacity="0.25"/><clipPath id="pc-${who}"><circle cx="32" cy="32" r="32"/></clipPath><g clip-path="url(#pc-${who})">${person(who, mood)}</g></svg>`;
+}
+
+function relayFace(mood: RelayMood, accent: string, x: number, y: number): string {
+  if (mood === 'off') return '';
+  const e = (dx: number) =>
+    mood === 'sleep'
+      ? `<path d="M${x + dx - 7} ${y} h14" stroke="${accent}" stroke-width="4" stroke-linecap="round"/>`
+      : mood === 'happy'
+        ? `<path d="M${x + dx - 7} ${y + 4} q7 -12 14 0" stroke="${accent}" stroke-width="4" fill="none" stroke-linecap="round"/>`
+        : `<circle cx="${x + dx}" cy="${y}" r="${mood === 'worry' ? 7 : 5.5}" fill="${accent}"/>`;
+  const mouth =
+    mood === 'happy'
+      ? `<path d="M${x - 10} ${y + 16} q10 9 20 0" stroke="${accent}" stroke-width="3.5" fill="none" stroke-linecap="round"/>`
+      : mood === 'worry'
+        ? `<path d="M${x - 8} ${y + 21} q8 -7 16 0" stroke="${accent}" stroke-width="3.5" fill="none" stroke-linecap="round"/>`
+        : mood === 'sleep'
+          ? `<text x="${x + 34}" y="${y - 12}" font-size="15" fill="${accent}" font-family="ui-sans-serif, sans-serif" font-weight="700">z z</text>`
+          : `<path d="M${x - 7} ${y + 18} h14" stroke="${accent}" stroke-width="3.5" stroke-linecap="round"/>`;
+  return e(-18) + e(18) + mouth;
+}
+
+/** One illustrated story panel: the office at some time of day, who is there, and how the agent's screen looks. */
+export function storyScene(sc: Scene, accent: string): string {
+  const W = 640;
+  const H = 300;
+  let seed = 5;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  const SKY = { day: ['#8ecbf2', '#d8eefc'], dusk: ['#3b3a7a', '#f2a56b'], night: ['#0d1233', '#2a2a66'], dawn: ['#7d86c9', '#ffc9a3'] }[sc.sky];
+  const dark = sc.sky === 'night';
+  const lit = sc.sky === 'night' || sc.sky === 'dusk';
+  let city = '';
+  for (let x = 40; x < 300; ) {
+    const w = 18 + rnd() * 26;
+    const h = 30 + rnd() * 62;
+    const bw = Math.min(w, 300 - x);
+    city += `<rect x="${x.toFixed(0)}" y="${(170 - h).toFixed(0)}" width="${bw.toFixed(0)}" height="${h.toFixed(0)}" fill="${sc.sky === 'day' ? '#9fb4cf' : sc.sky === 'dawn' ? '#6a6aa8' : '#141a3a'}"/>`;
+    if (lit) for (let wy = 176 - h; wy < 164; wy += 10) for (let wx = x + 3; wx < x + bw - 5; wx += 8) if (rnd() > (dark ? 0.82 : 0.6)) city += `<rect x="${wx.toFixed(0)}" y="${wy.toFixed(0)}" width="4" height="5" fill="#ffd27a"/>`;
+    x += w + 2;
+  }
+  const stars = dark ? Array.from({ length: 22 }, () => `<circle cx="${(44 + rnd() * 252).toFixed(0)}" cy="${(30 + rnd() * 60).toFixed(0)}" r="${(0.5 + rnd()).toFixed(1)}" fill="#fff" opacity=".85"/>`).join('') : '';
+  const orb =
+    sc.sky === 'night'
+      ? `<circle cx="258" cy="58" r="15" fill="#ffe6b8"/><circle cx="265" cy="53" r="14" fill="#151a42"/>`
+      : sc.sky === 'day'
+        ? `<circle cx="252" cy="60" r="18" fill="#fff3b0"/>`
+        : `<circle cx="${sc.sky === 'dusk' ? 240 : 90}" cy="150" r="26" fill="${sc.sky === 'dusk' ? '#ffb46b' : '#ffe1b8'}"/>`;
+  const cast = sc.cast ?? [];
+  const xs = cast.length === 1 ? [170] : cast.length === 2 ? [105, 235] : [70, 170, 270];
+  const people = cast.map(([who, mood], i) => `<g transform="translate(${xs[i] - 70} 66) scale(2.2)">${person(who, mood)}</g>`).join('');
+  const mood = sc.relay ?? 'off';
+  const on = mood !== 'off';
+  const lamp = sc.lamp
+    ? `<path d="M508 122 L614 122 L640 300 L470 300 Z" fill="#ffe9a8" opacity=".28"/>`
+    : '';
+  return `<svg class="art story-art" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The Lumen office, ${sc.sky}">
+    <defs>
+      <linearGradient id="ss-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${SKY[0]}"/><stop offset="1" stop-color="${SKY[1]}"/></linearGradient>
+      <clipPath id="ss-win"><rect x="40" y="26" width="260" height="144"/></clipPath>
+    </defs>
+    <rect width="${W}" height="${H}" fill="${dark ? '#4e4032' : sc.sky === 'dusk' ? '#6b5744' : '#8a745c'}"/>
+    <rect x="32" y="18" width="276" height="160" rx="4" fill="#2e2016"/>
+    <g clip-path="url(#ss-win)"><rect x="40" y="26" width="260" height="144" fill="url(#ss-sky)"/>${stars}${orb}${city}</g>
+    <rect x="167" y="26" width="6" height="144" fill="#2e2016"/><rect x="40" y="94" width="260" height="5" fill="#2e2016"/>
+    <rect x="340" y="30" width="70" height="52" fill="#fffaf0" transform="rotate(-3 375 56)"/><rect x="348" y="42" width="44" height="3" fill="#b3a17e" transform="rotate(-3 375 56)"/><rect x="348" y="52" width="52" height="3" fill="#b3a17e" transform="rotate(-3 375 56)"/><circle cx="375" cy="33" r="3.5" fill="#c0392b"/>
+    <rect x="420" y="36" width="38" height="38" fill="#ffe98a" transform="rotate(5 439 55)"/>
+    ${people}
+    <rect x="0" y="236" width="${W}" height="64" fill="#8a5f3c"/><rect x="0" y="236" width="${W}" height="7" fill="#a87549"/>
+    ${lamp}
+    <rect x="558" y="118" width="6" height="108" fill="#b88a2e"/><rect x="530" y="224" width="62" height="12" rx="5" fill="#b88a2e"/>
+    <path d="M508 122 Q508 92 536 92 L586 92 Q614 92 614 122 Z" fill="#1d7a5a"/><rect x="508" y="118" width="106" height="6" rx="3" fill="${sc.lamp ? '#ffe9a8' : '#145741'}"/>
+    <rect x="352" y="120" width="150" height="96" rx="8" fill="#221812"/><rect x="360" y="128" width="134" height="80" rx="4" fill="${on ? '#0f1524' : '#2b2622'}"/>
+    ${on ? `<rect x="360" y="128" width="134" height="80" rx="4" fill="${accent}" opacity=".14"/>` : ''}
+    ${relayFace(mood, accent, 427, 160)}
+    <rect x="418" y="216" width="18" height="12" fill="#221812"/><rect x="396" y="226" width="62" height="8" rx="4" fill="#221812"/>
+    ${sc.prop ? `<text x="320" y="232" font-size="34" text-anchor="middle">${sc.prop}</text>` : ''}
+  </svg>`;
+}
