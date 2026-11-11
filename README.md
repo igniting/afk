@@ -113,9 +113,13 @@ The same engine powers interactive play and the headless tests.
     idea in real AI agents, key terms, and links to the missions and labs that practise it.
   - Illustrations drawn as inline SVG (`src/ui/art.ts`): a diagram per concept (concept pages,
     mission briefs, shift banners), portraits of the cast, and a per-worker run timeline in debriefs.
-- **Visual theme — “Lamplight”**: a midnight-indigo sky with a faint starfield, desk-lamp amber
-  for everything you can act on, moonlight lilac for secondary detail. Fraunces (soft display
-  serif) for titles and story text, Figtree for the interface, JetBrains Mono for clocks and
-  numbers — all bundled with the site via Fontsource. The title screen is a night skyline where
-  your agent’s window glows in its colour; the 3D board uses the same palette with wooden desks.
+- **Visual theme — “Desk”**: an office desk at night. Walnut wood for the app frame, paper sheets
+  and index cards for panels, manila folder tabs for shifts, sticky notes for hints and
+  predictions, label-maker tags on the 3D board (green desk blotters on a wooden desk), and
+  banker’s-lamp green for everything you can act on. Fraunces for titles, Figtree for the
+  interface, Courier Prime (typewriter) for clocks and numbers, Caveat (handwriting) for sticky
+  notes — all bundled via Fontsource.
+- **Performance**: no blur effects; the 3D board stops drawing while a full-screen page covers it,
+  draws at 30 fps during a run (60 only while something is flying) and ~12 fps while building,
+  and redraws shadows only when something moves.
 - **Later**: save import/export UI, accessibility polish, performance checks.

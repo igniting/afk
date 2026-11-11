@@ -1308,6 +1308,7 @@ export class App {
 
   private overlay(html: string | null) {
     const o = $('overlay');
+    this.scene.setPaused(html != null);
     if (html == null) {
       o.hidden = true;
       o.innerHTML = '';

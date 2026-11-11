@@ -4,19 +4,19 @@ import type { ConceptId } from '../content/missions';
 import { fmtTime, type SimState } from '../sim/types';
 
 const C = {
-  ink: '#e2e8f0',
-  muted: '#94a3b8',
-  dim: '#4a5290',
-  panel: '#1a1f47',
-  panel2: '#232a5a',
-  line: '#353d80',
-  teal: '#5eead4',
-  amber: '#fbbf24',
-  sky: '#38bdf8',
-  violet: '#a78bfa',
-  pink: '#f472b6',
-  red: '#f87171',
-  green: '#4ade80',
+  ink: '#2b2620',
+  muted: '#6d6353',
+  dim: '#a8987a',
+  panel: '#ebe1cb',
+  panel2: '#fffaf0',
+  line: '#c9b993',
+  teal: '#0f8f7a',
+  amber: '#b7791f',
+  sky: '#2b7fc4',
+  violet: '#6d4fc2',
+  pink: '#c2408b',
+  red: '#c0392b',
+  green: '#1c8a4d',
   blue: '#2563eb',
 };
 
@@ -92,8 +92,8 @@ const DIAGRAMS: Record<ConceptId, () => string> = {
       `${rect(14, 18, 110, 150, C.panel, 10)}${text(69, 38, 'Shelf', { size: 11, fill: C.muted })}
        ${['📄 Brand guide', '📝 Summary', '📄 Old notes', '📄 Manual'].map((l, i) => rect(24, 48 + i * 28, 90, 22, C.panel2, 5) + text(69, 63 + i * 28, l, { size: 10, fill: C.ink })).join('')}
        ${arrow(128, 92, 168, 92, C.sky)}${text(148, 84, 'read', { size: 10, fill: C.sky })}
-       ${rect(172, 58, 176, 70, '#0f172a', 10, `stroke="${C.line}" stroke-width="2"`)}${text(260, 50, 'AI tray · 10 units', { size: 11, fill: C.muted })}
-       ${tile(180, 82, 32, '#64748b')}${tile(214, 82, 16, C.amber)}${tile(232, 82, 34, C.sky)}${tile(268, 82, 34, C.sky)}${tile(304, 82, 34, C.pink)}
+       ${rect(172, 58, 176, 70, '#fffaf0', 10, `stroke="${C.line}" stroke-width="2"`)}${text(260, 50, 'AI tray · 10 units', { size: 11, fill: C.muted })}
+       ${tile(180, 82, 32, '#8d8371')}${tile(214, 82, 16, C.amber)}${tile(232, 82, 34, C.sky)}${tile(268, 82, 34, C.sky)}${tile(304, 82, 34, C.pink)}
        ${tile(250, 146, 84, C.sky, true)}${text(292, 182, 'didn’t fit → left out', { size: 10, fill: C.red })}${text(260, 120, 'only what’s here exists for the AI', { size: 10, fill: C.teal })}`,
       360,
       190,
@@ -216,7 +216,7 @@ const DIAGRAMS: Record<ConceptId, () => string> = {
     ),
   foundations: () => {
     const row = (y: number, e: string, l: string) =>
-      `${emoji(36, y, e, 16)}${text(60, y + 4, l, { size: 11, anchor: 'start' })}${rect(250, y - 10, 40, 20, C.green, 10, 'opacity="0.85"')}<circle cx="280" cy="${y}" r="8" fill="#0b1120"/>${text(320, y + 4, 'on', { size: 10, fill: C.green })}`;
+      `${emoji(36, y, e, 16)}${text(60, y + 4, l, { size: 11, anchor: 'start' })}${rect(250, y - 10, 40, 20, C.green, 10, 'opacity="0.85"')}<circle cx="280" cy="${y}" r="8" fill="#fffaf0"/>${text(320, y + 4, 'on', { size: 10, fill: C.green })}`;
     return svg(
       `${row(30, '📒', 'Journal')}${row(62, '🚦', 'Permission gate')}${row(94, '🔁', 'Duplicate check')}${row(126, '🧠', 'Memory admission')}${row(158, '🔢', 'Version check')}`,
       360,
@@ -308,57 +308,49 @@ export function timelineSvg(s: SimState, jobName: (taskId: string) => string): s
 }
 
 // Title screen ------------------------------------------------------------------------
-/** A night skyline: the city sleeps, one window — your agent's — glows in its colour. */
+/** The desk at night: a banker's lamp, paperwork, a mug — and your agent's screen glowing in its colour. */
 export function titleSky(accent: string): string {
   const W = 640;
   const H = 230;
-  let seed = 7;
+  let seed = 11;
   const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
-  const stars = Array.from({ length: 46 }, () => {
-    const x = rnd() * W;
-    const y = rnd() * 120;
-    const r = rnd() * 1.3 + 0.3;
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="#fff" opacity="${(0.35 + rnd() * 0.6).toFixed(2)}"/>`;
-  }).join('');
-  // Two rows of buildings: far (lilac haze) and near (ink), with warm windows here and there.
-  const far: string[] = [];
-  const near: string[] = [];
-  let x = -10;
-  while (x < W) {
-    const w = 34 + rnd() * 40;
-    const h = 60 + rnd() * 70;
-    far.push(`<rect x="${x.toFixed(1)}" y="${(H - h - 30).toFixed(1)}" width="${w.toFixed(1)}" height="${(h + 30).toFixed(1)}" fill="#1c2160"/>`);
-    x += w + 4;
+  // Window onto the night city
+  let city = '';
+  for (let x = 44; x < 236; ) {
+    const w = 16 + rnd() * 22;
+    const h = 24 + rnd() * 50;
+    city += `<rect x="${x.toFixed(0)}" y="${(132 - h).toFixed(0)}" width="${Math.min(w, 236 - x).toFixed(0)}" height="${h.toFixed(0)}" fill="#141a3a"/>`;
+    for (let wy = 136 - h; wy < 126; wy += 9) for (let wx = x + 3; wx < Math.min(x + w, 236) - 5; wx += 7) if (rnd() > 0.8) city += `<rect x="${wx.toFixed(0)}" y="${wy.toFixed(0)}" width="3" height="4" fill="#ffd27a"/>`;
+    x += w + 2;
   }
-  x = -6;
-  let agentDone = false;
-  while (x < W) {
-    const w = 44 + rnd() * 52;
-    const h = 46 + rnd() * 80;
-    const top = H - h;
-    near.push(`<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="#0c0e2a"/>`);
-    for (let wy = top + 10; wy < H - 10; wy += 13)
-      for (let wx = x + 7; wx < x + w - 10; wx += 11) {
-        const v = rnd();
-        if (!agentDone && x > W * 0.52 && wy > top + 20) {
-          agentDone = true;
-          near.push(`<rect x="${(wx - 9).toFixed(1)}" y="${(wy - 9).toFixed(1)}" width="24" height="24" rx="6" fill="${accent}" opacity=".28" filter="url(#glow)"/><rect x="${wx.toFixed(1)}" y="${wy.toFixed(1)}" width="6" height="7" rx="1" fill="${accent}"/>`);
-        } else if (v > 0.86) near.push(`<rect x="${wx.toFixed(1)}" y="${wy.toFixed(1)}" width="6" height="7" rx="1" fill="#ffc46b" opacity="${(0.55 + v * 0.4).toFixed(2)}"/>`);
-      }
-    x += w + 3;
-  }
-  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A city at night; one window is lit">
+  const stars = Array.from({ length: 16 }, () => `<circle cx="${(46 + rnd() * 186).toFixed(0)}" cy="${(34 + rnd() * 40).toFixed(0)}" r="${(0.5 + rnd()).toFixed(1)}" fill="#fff" opacity=".8"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="An office desk at night with a lamp and a glowing screen">
     <defs>
-      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b0d26"/><stop offset=".6" stop-color="#1b1f5c"/><stop offset="1" stop-color="#3a2c6a"/></linearGradient>
-      <radialGradient id="moonglow"><stop offset="0" stop-color="#fff2d6" stop-opacity=".55"/><stop offset="1" stop-color="#fff2d6" stop-opacity="0"/></radialGradient>
-      <filter id="glow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="4"/></filter>
-      <mask id="crescent"><rect width="${W}" height="${H}" fill="#fff"/><circle cx="${W * 0.8 + 10}" cy="44" r="22" fill="#000"/></mask>
+      <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a4a3a"/><stop offset="1" stop-color="#6b5744"/></linearGradient>
+      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1233"/><stop offset="1" stop-color="#2a2a66"/></linearGradient>
+      <linearGradient id="cone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a8" stop-opacity=".55"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/></linearGradient>
+      <clipPath id="win"><rect x="44" y="28" width="192" height="104"/></clipPath>
     </defs>
-    <rect width="${W}" height="${H}" fill="url(#sky)"/>
-    ${stars}
-    <circle cx="${W * 0.8}" cy="50" r="70" fill="url(#moonglow)"/>
-    <circle cx="${W * 0.8}" cy="50" r="24" fill="#ffe6b8" mask="url(#crescent)"/>
-    ${far.join('')}
-    ${near.join('')}
+    <rect width="${W}" height="${H}" fill="url(#wall)"/>
+    <rect x="36" y="20" width="208" height="120" rx="4" fill="#2e2016"/>
+    <g clip-path="url(#win)"><rect x="44" y="28" width="192" height="104" fill="url(#sky)"/>${stars}<circle cx="204" cy="52" r="13" fill="#ffe6b8"/><circle cx="210" cy="48" r="12" fill="#161b45"/>${city}</g>
+    <rect x="138" y="28" width="5" height="104" fill="#2e2016"/><rect x="44" y="78" width="192" height="4" fill="#2e2016"/>
+    <rect x="286" y="34" width="62" height="46" fill="#fffaf0" transform="rotate(-3 317 57)"/><rect x="292" y="44" width="40" height="3" fill="#b3a17e" transform="rotate(-3 317 57)"/><rect x="292" y="53" width="48" height="3" fill="#b3a17e" transform="rotate(-3 317 57)"/><rect x="292" y="62" width="30" height="3" fill="#b3a17e" transform="rotate(-3 317 57)"/><circle cx="317" cy="36" r="3" fill="#c0392b"/>
+    <rect x="356" y="42" width="34" height="34" fill="#ffe98a" transform="rotate(4 373 59)"/>
+    <!-- desk -->
+    <rect x="0" y="176" width="${W}" height="54" fill="#8a5f3c"/><rect x="0" y="176" width="${W}" height="6" fill="#a87549"/>
+    <!-- banker's lamp -->
+    <path d="M470 96 L596 96 L640 230 L426 230 Z" fill="url(#cone)"/>
+    <rect x="528" y="92" width="6" height="74" fill="#b88a2e"/><rect x="500" y="164" width="62" height="12" rx="5" fill="#b88a2e"/>
+    <path d="M470 96 Q470 66 500 66 L566 66 Q596 66 596 96 Z" fill="#1d7a5a"/><rect x="470" y="92" width="126" height="6" rx="3" fill="#145741"/><path d="M486 74 Q520 68 560 72" stroke="#5fc9a4" stroke-width="3" fill="none" opacity=".6"/>
+    <!-- monitor: the agent -->
+    <rect x="292" y="96" width="124" height="66" rx="6" fill="#221812"/><rect x="298" y="102" width="112" height="54" rx="3" fill="#0f1524"/>
+    <rect x="298" y="102" width="112" height="54" rx="3" fill="${accent}" opacity=".16"/>
+    <rect x="308" y="112" width="52" height="5" rx="2" fill="${accent}"/><rect x="308" y="123" width="80" height="4" rx="2" fill="${accent}" opacity=".6"/><rect x="308" y="133" width="64" height="4" rx="2" fill="${accent}" opacity=".6"/><rect x="308" y="143" width="9" height="6" fill="${accent}"/>
+    <rect x="346" y="162" width="16" height="10" fill="#221812"/><rect x="326" y="170" width="56" height="6" rx="3" fill="#221812"/>
+    <!-- paperwork, mug, pencil -->
+    <rect x="96" y="168" width="96" height="8" fill="#fffaf0"/><rect x="102" y="161" width="92" height="8" fill="#f4ecdb"/><rect x="92" y="154" width="98" height="8" fill="#fffaf0"/>
+    <rect x="222" y="146" width="30" height="30" rx="4" fill="#c0392b"/><path d="M252 153 q13 7 0 16" stroke="#c0392b" stroke-width="5" fill="none"/><path d="M230 142 q4 -8 0 -14 M240 142 q4 -8 0 -14" stroke="#fff" stroke-width="2" fill="none" opacity=".5"/>
+    <rect x="40" y="170" width="46" height="5" rx="2" fill="#e0a526" transform="rotate(-8 63 172)"/>
   </svg>`;
 }

@@ -106,6 +106,9 @@ export class BoardScene {
   private liveKey = '';
   private liveLabel!: CSS2DObject;
   private liveFlash = 0;
+  private paused = false;
+  private lastDraw = 0;
+  private frameN = 0;
   private gateLamp!: THREE.Mesh;
   private gateFlash = 0;
   private gateOk = 0;
@@ -118,16 +121,19 @@ export class BoardScene {
 
   constructor(private host: HTMLElement, private cb: SceneCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
+    // Shadows are redrawn only when something moves (see frame()), not 60 times a second.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.domElement.setAttribute('aria-hidden', 'true');
     host.appendChild(this.renderer.domElement);
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'labels';
     host.appendChild(this.labels.domElement);
 
-    this.scene.background = new THREE.Color('#0d1030');
-    this.scene.fog = new THREE.Fog('#0d1030', 30, 55);
+    this.scene.background = new THREE.Color('#4a3524');
+    this.scene.fog = new THREE.Fog('#4a3524', 30, 55);
     this.buildWorld();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
@@ -146,13 +152,7 @@ export class BoardScene {
 
   private buildWorld() {
     const s = this.scene;
-    s.add(new THREE.HemisphereLight('#e2e0ff', '#1d2256', 1.35));
-    const warm = new THREE.PointLight('#fde68a', 1.1, 26, 1.4);
-    warm.position.set(-6, 6, 4);
-    s.add(warm);
-    const cool = new THREE.PointLight('#9aa4ff', 0.9, 24, 1.4);
-    cool.position.set(6, 5, -5);
-    s.add(cool);
+    s.add(new THREE.HemisphereLight('#fff1d6', '#5a4028', 1.9));
     const sun = new THREE.DirectionalLight('#ffffff', 1.8);
     sun.position.set(-5, 12, 8);
     sun.castShadow = true;
@@ -160,11 +160,11 @@ export class BoardScene {
     Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10 });
     s.add(sun);
 
-    const board = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.4, 6.2), mat('#1d2256'));
+    const board = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.4, 6.2), mat('#9a6b43'));
     board.position.set(0, -0.2, 0.75);
     board.receiveShadow = true;
     s.add(board);
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#171b4a'));
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.3, 3), mat('#6f4d31'));
     strip.position.set(0, -0.25, -3.6);
     strip.receiveShadow = true;
     s.add(strip);
@@ -179,7 +179,7 @@ export class BoardScene {
       ['Shared records', new THREE.Vector3(4.65, 0, 0.75), 3.6],
     ];
     for (const [name, p, w] of pads) {
-      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#2a3170'));
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, 5.4), mat('#2f6652'));
       pad.position.set(p.x, 0.03, p.z);
       pad.receiveShadow = true;
       s.add(pad);
@@ -345,7 +345,7 @@ export class BoardScene {
   private buildOutside() {
     // Inbox
     const ib = new THREE.Group();
-    const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.8, 0.9), mat('#6d5bd0'));
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.8, 0.9), mat('#c9a45c'));
     box.position.y = 0.9;
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.6, 0.15), mat('#334155'));
     post.position.y = 0.3;
@@ -447,9 +447,9 @@ export class BoardScene {
   private buildCast() {
     for (const [id, c] of Object.entries(CAST_POS)) {
       const g = new THREE.Group();
-      const shirt = mat(c.shirt, { transparent: true });
-      const skin = mat(c.skin, { transparent: true });
-      const hair = mat(c.hair, { transparent: true });
+      const shirt = mat(c.shirt);
+      const skin = mat(c.skin);
+      const hair = mat(c.hair);
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.55, 6, 16), shirt);
       body.position.y = 0.62;
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 20), skin);
@@ -548,6 +548,7 @@ export class BoardScene {
   }
 
   setBuild(build: Build) {
+    this.renderer.shadowMap.needsUpdate = true;
     this.build = build;
     this.setAccent(build.accent);
     const w = build.watchers[0];
@@ -619,9 +620,24 @@ export class BoardScene {
   }
 
   /** Called every animation frame. */
+  /** While a full-screen page covers the board, stop drawing it (the last frame stays on screen). */
+  setPaused(on: boolean) {
+    this.paused = on;
+    if (!on) this.renderer.shadowMap.needsUpdate = true;
+  }
+
   frame(nowMs: number) {
+    if (this.paused) {
+      this.now = nowMs;
+      return;
+    }
+    // Draw at 60 fps only while something is flying; otherwise 30 fps during a run and ~12 fps while building.
+    const minGap = this.flyers.length ? 0 : this.sim ? 30 : 80;
+    if (nowMs - this.lastDraw < minGap) return;
+    this.lastDraw = nowMs;
     const dt = this.now ? Math.min(0.1, (nowMs - this.now) / 1000) : 0;
     this.now = nowMs;
+    if (this.flyers.length || ++this.frameN % 15 === 0) this.renderer.shadowMap.needsUpdate = true;
     const sim = this.sim;
     const pulse = this.reduceMotion ? 1 : 0.75 + 0.25 * Math.sin(nowMs / 300);
 
@@ -674,7 +690,14 @@ export class BoardScene {
     }
     for (const [id, c] of Object.entries(this.cast)) {
       const here = sim ? this.present(sim, id) : true;
-      for (const m of c.mats) m.opacity = here ? 1 : 0.28;
+      for (const m of c.mats) {
+        // Only switch to (costlier) transparency while the person is away.
+        if (m.transparent === here) {
+          m.transparent = !here;
+          m.needsUpdate = true;
+        }
+        m.opacity = here ? 1 : 0.28;
+      }
       c.l.element.textContent = `${CAST_POS[id].name}${here ? '' : ' · away'}`;
       c.bob = Math.max(0, c.bob - dt * 1.5);
       c.g.position.y = this.reduceMotion ? 0 : Math.abs(Math.sin(c.bob * Math.PI * 3)) * 0.35 * c.bob;
